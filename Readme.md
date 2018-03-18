@@ -3,6 +3,8 @@
 The package inflight provides primitives(data strutures) for managing inflight operations that
 are being processed in a distrubuted system.
 
+[![GoDoc](https://godoc.org/github.com/lytics/inflight?status.svg)](http://godoc.org/github.com/lytics/inflight)
+
 ## CallGroup
 
 CallGroup spawns off a group of operations for each call to `Add()` and
