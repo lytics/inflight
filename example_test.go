@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/lytics/inflight"
 	"github.com/lytics/inflight/testutils"
-	"github.com/lytics/lio/src/lib/inflight"
 )
 
 //TestExample1 uses the callgroup to do a concurrently map reduce, by spliting and
