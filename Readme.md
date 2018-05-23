@@ -12,6 +12,8 @@ calls the `CallGroupCompletion` func when the last operation have
 completed.  The CallGroupCompletion func can be thought of as a finalizer where
 one can gather errors and/or results from the function calls.
 
+Helpful when you want to map out operations to multiple go routines, and then have the set of operations reduced when all have completed.
+
  Example Usage:
 ```go
 package main
