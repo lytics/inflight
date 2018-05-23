@@ -124,21 +124,25 @@ func TestOpQueueFull(t *testing.T) {
 	defer opq.Close()
 
 	succuess := 0
-	fullErrors := 0
+	depthErrors := 0
+	widthErrors := 0
 	for i := 0; i < 100; i++ {
 		op := cg1.Add(uint64(i), &tsMsg{i, i, "user", 2222222})
 		err := opq.Enqueue(op.Key, op)
 		switch err {
 		case nil:
 			succuess++
-		case ErrQueueSaturated:
-			fullErrors++
+		case ErrQueueSaturatedDepth:
+			depthErrors++
+		case ErrQueueSaturatedWidth:
+			widthErrors++
 		default:
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 	assert.Equalf(t, succuess, 10, "expected 10, got:%v", succuess)
-	assert.Equalf(t, fullErrors, 90, "expected 10, got:%v", fullErrors)
+	assert.Equalf(t, depthErrors, 90, "expected 90, got:%v", depthErrors)
+	assert.Equalf(t, widthErrors, 0, "expected 0, got:%v", widthErrors)
 
 	timer := time.AfterFunc(5*time.Second, func() {
 		t.Fatalf("testcase timed out after 5 secs.")
@@ -161,7 +165,8 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 	enqueueCnt := testutils.AtomicInt{}
 	dequeueCnt := testutils.AtomicInt{}
 	mergeCnt := testutils.AtomicInt{}
-	fullErrorCnt := testutils.AtomicInt{}
+	depthErrorCnt := testutils.AtomicInt{}
+	widthErrorCnt := testutils.AtomicInt{}
 
 	opq := NewOpQueue(300, 500)
 
@@ -185,8 +190,10 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 				switch err {
 				case nil:
 					enqueueCnt.Incr()
-				case ErrQueueSaturated:
-					fullErrorCnt.Incr()
+				case ErrQueueSaturatedDepth:
+					depthErrorCnt.Incr()
+				case ErrQueueSaturatedWidth:
+					widthErrorCnt.Incr()
 				default:
 					t.Fatalf("unexpected error: %v", err)
 				}
@@ -237,5 +244,5 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 	// NOTE: I get the following performance on my laptop:
 	//       opqueue_test.go:275: enqueue errors: 137075 mergedMsgs:2553 enqueueCnt:231437 dequeueCnt:231437 rate:115718 msgs/sec
 	//       Over 100k msg a sec is more than fast enough for linkgrid...
-	t.Logf("enqueue errors: %v mergedMsgs:%v enqueueCnt:%v dequeueCnt:%v rate:%v msgs/sec", fullErrorCnt.Get(), mergeCnt.Get(), enq, deq, enq/runtime)
+	t.Logf("enqueue errors: [depth:%v width:%v] mergedMsgs:%v enqueueCnt:%v dequeueCnt:%v rate:%v msgs/sec", depthErrorCnt.Get(), widthErrorCnt.Get(), mergeCnt.Get(), enq, deq, enq/runtime)
 }
