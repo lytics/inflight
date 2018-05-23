@@ -113,7 +113,7 @@ func TestOpQueueClose(t *testing.T) {
 
 }
 
-func TestOpQueueFull(t *testing.T) {
+func TestOpQueueFullDepth(t *testing.T) {
 	t.Parallel()
 	completed1 := 0
 	cg1 := NewCallGroup(func(finalState map[ID]*Response) {
@@ -155,6 +155,52 @@ func TestOpQueueFull(t *testing.T) {
 	timer.Stop()
 }
 
+// TestOpQueueFullWidth exactly like the test above, except we enqueue the SAME ID each time,
+// so that we get ErrQueueSaturatedWidth errrors instead of ErrQueueSaturatedDepth errors.
+func TestOpQueueFullWidth(t *testing.T) {
+	t.Parallel()
+	completed1 := 0
+	cg1 := NewCallGroup(func(finalState map[ID]*Response) {
+		completed1++
+	})
+
+	opq := NewOpQueue(10, 10)
+	defer opq.Close()
+
+	succuess := 0
+	depthErrors := 0
+	widthErrors := 0
+	for i := 0; i < 100; i++ {
+		op := cg1.Add(1, &tsMsg{i, i, "user", 2222222})
+		err := opq.Enqueue(op.Key, op)
+		switch err {
+		case nil:
+			succuess++
+		case ErrQueueSaturatedDepth:
+			depthErrors++
+		case ErrQueueSaturatedWidth:
+			widthErrors++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	assert.Equalf(t, succuess, 10, "expected 10, got:%v", succuess)
+	assert.Equalf(t, depthErrors, 0, "expected 90, got:%v", depthErrors)
+	assert.Equalf(t, widthErrors, 90, "expected 0, got:%v", widthErrors)
+
+	timer := time.AfterFunc(5*time.Second, func() {
+		t.Fatalf("testcase timed out after 5 secs.")
+	})
+
+	found := 0
+	set1, open := opq.Dequeue()
+	assert.T(t, open)
+	assert.Tf(t, len(set1.Ops()) == 10, " at loop:%v set1_len:%v", succuess, len(set1.Ops())) // max width is 10, so we should get 10 in the first batch
+	found += len(set1.Ops())
+
+	timer.Stop()
+}
+
 func TestOpQueueForRaceDetection(t *testing.T) {
 	t.Parallel()
 	completed1 := 0
@@ -169,19 +215,24 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 	widthErrorCnt := testutils.AtomicInt{}
 
 	opq := NewOpQueue(300, 500)
+	defer opq.Close()
 
-	startingLine := sync.WaitGroup{}
-	startingLine.Add(1) // block all go routines until the loop has finished spinning them up.
+	startingLine1 := sync.WaitGroup{}
+	startingLine2 := sync.WaitGroup{}
+	// block all go routines until the loop has finished spinning them up.
+	startingLine1.Add(1)
+	startingLine2.Add(1)
 
 	finishLine, finish := context.WithCancel(context.Background())
 	dequeFinishLine, deqFinish := context.WithCancel(context.Background())
 	const concurrency = 2
 	for w := 0; w < concurrency; w++ {
-		go func() {
-			startingLine.Wait()
+		go func(w int) {
+			startingLine1.Wait()
 			for i := 0; i < 1000000; i++ {
 				select {
 				case <-finishLine.Done():
+					t.Logf("worker %v exiting at %v", w, i)
 					return
 				default:
 				}
@@ -198,12 +249,12 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 					t.Fatalf("unexpected error: %v", err)
 				}
 			}
-		}()
+		}(w)
 	}
 
 	for w := 0; w < concurrency; w++ {
 		go func() {
-			startingLine.Wait()
+			startingLine2.Wait()
 			for {
 				select {
 				case <-dequeFinishLine.Done():
@@ -211,6 +262,11 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 				default:
 				}
 				set1, open := opq.Dequeue()
+				select {
+				case <-dequeFinishLine.Done():
+					return
+				default:
+				}
 				assert.T(t, open)
 				dequeueCnt.IncrBy(len(set1.Ops()))
 				if len(set1.Ops()) > 1 {
@@ -219,7 +275,8 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 			}
 		}()
 	}
-	startingLine.Done() //release all the waiting workers.
+	startingLine1.Done() //release all the waiting workers.
+	startingLine2.Done() //release all the waiting workers.
 
 	const runtime = 2
 	timeout := time.AfterFunc((runtime+10)*time.Second, func() {
