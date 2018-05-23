@@ -7,7 +7,16 @@ import (
 	"sync"
 )
 
-var ErrQueueSaturated = fmt.Errorf("queue is saturated")
+var (
+	// ErrQueueSaturatedDepth is the error returned when the queue has reached
+	// it's max queue depth
+	ErrQueueSaturatedDepth = fmt.Errorf("queue is saturated (depth)")
+
+	// ErrQueueSaturatedWidth is the error returned when a OpSet (aka a row) with
+	// in the queue has reached it's max width.  This happens when one submits
+	// many duplicate IDs.
+	ErrQueueSaturatedWidth = fmt.Errorf("queue is saturated (width)")
+)
 
 /*
 OpSet represents the set of Ops that have been merged in an OpQueue,
@@ -61,20 +70,20 @@ type OpQueue struct {
 	ctx  context.Context
 	can  context.CancelFunc
 
-	height  int
+	depth   int
 	width   int
 	q       *list.List
 	entries map[ID]*OpSet
 }
 
-func NewOpQueue(height, width int) *OpQueue {
+func NewOpQueue(depth, width int) *OpQueue {
 	cond := sync.NewCond(&sync.Mutex{})
 	myctx, can := context.WithCancel(context.Background())
 	q := &OpQueue{
 		cond:    cond,
 		ctx:     myctx,
 		can:     can,
-		height:  height,
+		depth:   depth,
 		width:   width,
 		q:       list.New(),
 		entries: map[ID]*OpSet{},
@@ -95,7 +104,7 @@ func (q *OpQueue) Close() {
 	q.can()
 }
 
-// Len returns the number of uniq IDs in the queue, that is the height of the queue.
+// Len returns the number of uniq IDs in the queue, that is the depth of the queue.
 func (q *OpQueue) Len() int {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
@@ -112,8 +121,8 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 
-	if q.q.Len() >= q.height {
-		return ErrQueueSaturated
+	if q.q.Len() >= q.depth {
+		return ErrQueueSaturatedDepth
 	}
 
 	set, ok := q.entries[id]
@@ -142,7 +151,7 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 	}
 
 	if len(set.Ops()) >= q.width {
-		return ErrQueueSaturated
+		return ErrQueueSaturatedWidth
 	}
 
 	set.append(op)
