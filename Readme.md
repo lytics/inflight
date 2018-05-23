@@ -4,6 +4,7 @@ The package inflight provides primitives(data strutures) for managing inflight o
 are being processed in a distrubuted system.
 
 [![GoDoc](https://godoc.org/github.com/lytics/inflight?status.svg)](http://godoc.org/github.com/lytics/inflight)
+[![Build Status](https://travis-ci.org/lytics/inflight.svg?branch=master)](https://travis-ci.org/lytics/inflight)
 
 ## CallGroup
 
