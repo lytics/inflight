@@ -5,6 +5,8 @@ are being processed in a distrubuted system.
 
 [![GoDoc](https://godoc.org/github.com/lytics/inflight?status.svg)](http://godoc.org/github.com/lytics/inflight)
 [![Build Status](https://travis-ci.org/lytics/inflight.svg?branch=master)](https://travis-ci.org/lytics/inflight)
+[![Code Coverage](https://codecov.io/gh/lytics/inflight/branch/master/graph/badge.svg)](https://codecov.io/gh/lytics/inflight)
+[![Go ReportCard](https://goreportcard.com/badge/lytics/inflight)](https://goreportcard.com/report/lytics/inflight)
 
 ## CallGroup
 
@@ -76,7 +78,7 @@ func main() {
 ## Opqueue
 
 OpQueue is a thread-safe duplicate operation suppression queue, that combines
-duplicate operations (queue entires) into sets that will be dequeued togather.
+duplicate operations (queue entires) into sets that will be dequeued together.
 
 For example, If you enqueue an item with a key that already exists, then that
 item will be appended to that key's set of items. Otherwise the item is
