@@ -18,10 +18,8 @@ var (
 	ErrQueueSaturatedWidth = fmt.Errorf("queue is saturated (width)")
 )
 
-/*
-OpSet represents the set of Ops that have been merged in an OpQueue,
-It provides convenience functions for appending new Ops and for completing them.
-*/
+// OpSet represents the set of Ops that have been merged in an OpQueue,
+// It provides convenience functions for appending new Ops and for completing them.
 type OpSet struct {
 	set []*Op
 }
@@ -36,12 +34,12 @@ func (os *OpSet) append(op *Op) {
 	os.set = append(os.set, op)
 }
 
-//Ops
+// Ops get the list of ops in this set.
 func (os *OpSet) Ops() []*Op {
 	return os.set
 }
 
-//FinishAll a convenience func that calls finish on each Op in the set, passing the
+// FinishAll a convenience func that calls finish on each Op in the set, passing the
 // results or error to all the Ops in the OpSet.
 //
 // NOTE: The call group that owns this OP will not call it's finish function until all
@@ -53,18 +51,16 @@ func (os *OpSet) FinishAll(err error, resp interface{}) {
 	}
 }
 
-/*
-OpQueue is a thread-safe duplicate operation suppression queue, that combines
-duplicate operations (queue entires) into sets that will be dequeued togather.
+// OpQueue is a thread-safe duplicate operation suppression queue, that combines
+// duplicate operations (queue entires) into sets that will be dequeued together.
 
-For example, If you enqueue an item with a key that already exists, then that
-item will be appended to that key's set of items. Otherwise the item is
-inserted into the head of the list as a new item.
+// For example, If you enqueue an item with a key that already exists, then that
+// item will be appended to that key's set of items. Otherwise the item is
+// inserted into the head of the list as a new item.
 
-On Dequeue a SET is returned of all items that share a key in the queue.
-It blocks on dequeue if the queue is empty, but returns an error if the
-queue is full during enqueue.
-*/
+// On Dequeue a SET is returned of all items that share a key in the queue.
+// It blocks on dequeue if the queue is empty, but returns an error if the
+// queue is full during enqueue.
 type OpQueue struct {
 	cond *sync.Cond
 	ctx  context.Context

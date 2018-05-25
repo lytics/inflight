@@ -4,6 +4,7 @@ import (
 	"sync"
 )
 
+// ID is unique id.
 type ID uint64
 
 // CallGroup spawns off a group of operations for each call to Add() and
@@ -40,6 +41,7 @@ func NewCallGroup(cgc CallGroupCompletion) *CallGroup {
 	}
 }
 
+// Add a op to message to callgroup.
 func (cg *CallGroup) Add(k uint64, msg interface{}) *Op {
 	key := ID(k)
 
@@ -57,7 +59,7 @@ func (cg *CallGroup) Add(k uint64, msg interface{}) *Op {
 	return op
 }
 
-//Used to by the package to extract the active ops for this callgroup.
+// Used to by the package to extract the active ops for this callgroup.
 func (cg *CallGroup) ops() map[ID]*Op {
 	return cg.outstandingOps
 }
@@ -73,12 +75,12 @@ func (cg *CallGroup) done() {
 	})
 }
 
-//CallGroupCompletion is the reducer function for a callgroup, its called once all
+// CallGroupCompletion is the reducer function for a callgroup, its called once all
 // Ops in the callgroup have called Finished and the final state is passed to this
 // function.
 type CallGroupCompletion func(finalState map[ID]*Response)
 
-//Op represents one inflight operaton or message.  When this Op's Finish func is called
+// Op represents one inflight operaton or message.  When this Op's Finish func is called
 // the results for this Op will be added to the finalState.  When all Ops in the
 // callgroup have called Finish, then the CallGroup's CallGroupCompletion func will be
 // called with the final state for all Ops.
@@ -88,6 +90,7 @@ type Op struct {
 	Msg interface{}
 }
 
+// Finish this op.
 func (o *Op) Finish(err error, resp interface{}) {
 	o.cg.mu.Lock()
 	defer o.cg.mu.Unlock()
@@ -102,6 +105,7 @@ func (o *Op) Finish(err error, resp interface{}) {
 	o.cg.done()
 }
 
+// Response for an op.
 type Response struct {
 	Op     *Op
 	Err    error
