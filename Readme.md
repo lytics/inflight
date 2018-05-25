@@ -1,4 +1,4 @@
-# Inflight - primitives for coordinating interdependent operations in distrubuted systems
+# Inflight - primitives for coordinating interdependent operations in distributed systems
 
 The package inflight provides primitives(data strutures) for managing inflight operations that
 are being processed in a distrubuted system.
