@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bmizerany/assert"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/lytics/inflight/testutils"
 )
 
@@ -38,42 +39,42 @@ func TestOpQueue(t *testing.T) {
 
 	{
 		err := opq.Enqueue(op1_1.Key, op1_1)
-		assert.T(t, err == nil)
+		assert.Equal(t, nil, err)
 		err = opq.Enqueue(op2_1.Key, op2_1)
-		assert.T(t, err == nil)
+		assert.Equal(t, nil, err)
 		err = opq.Enqueue(op1_2.Key, op1_2)
-		assert.T(t, err == nil)
+		assert.Equal(t, nil, err)
 		err = opq.Enqueue(op2_2.Key, op2_2)
-		assert.T(t, err == nil)
+		assert.Equal(t, nil, err)
+		assert.Equal(t, 2, opq.Len()) // only 2 keys
 	}
 
 	set1, open := opq.Dequeue()
-	assert.T(t, open)
+	assert.True(t, open)
 	set2, open := opq.Dequeue()
-	assert.T(t, open)
+	assert.True(t, open)
 
 	{
-		assert.T(t, len(set1.Ops()) == 2)
-		assert.T(t, len(set2.Ops()) == 2)
+		assert.Equal(t, 2, len(set1.Ops()))
+		assert.Equal(t, 2, len(set2.Ops()))
 	}
 
 	{
 		//The sets should be made of one item of each callgroup, so we'll
 		//have to complete both sets before we expect complete[1,2] to increment
-		assert.T(t, completed1 == 0)
-		assert.T(t, completed2 == 0)
+		assert.Equal(t, 0, completed1)
+		assert.Equal(t, 0, completed2)
 		set := set1.Ops()
 		set[0].Finish(nil, nil)
 		set[1].Finish(nil, nil)
-		assert.T(t, completed1 == 0)
-		assert.T(t, completed2 == 0)
+		assert.Equal(t, 0, completed1)
+		assert.Equal(t, 0, completed2)
 
-		set = set2.Ops()
-		set[0].Finish(nil, nil)
-		set[1].Finish(nil, nil)
-		assert.T(t, completed1 == 1)
-		assert.T(t, completed2 == 1)
+		set2.FinishAll(nil, nil)
+		assert.Equal(t, 1, completed1)
+		assert.Equal(t, 1, completed2)
 	}
+
 }
 
 func TestOpQueueClose(t *testing.T) {
@@ -88,7 +89,7 @@ func TestOpQueueClose(t *testing.T) {
 	for i := 0; i < 9; i++ {
 		op := cg1.Add(uint64(i), &tsMsg{i, i, "user", 2222222})
 		err := opq.Enqueue(op.Key, op)
-		assert.T(t, err == nil)
+		assert.Equal(t, nil, err)
 	}
 
 	timer := time.AfterFunc(5*time.Second, func() {
@@ -96,8 +97,8 @@ func TestOpQueueClose(t *testing.T) {
 	})
 	for i := 0; i < 9; i++ {
 		set1, open := opq.Dequeue()
-		assert.T(t, open)
-		assert.Tf(t, len(set1.Ops()) == 1, " at loop:%v set1_len:%v", i, len(set1.Ops()))
+		assert.True(t, open)
+		assert.Equal(t, 1, len(set1.Ops()), " at loop:%v set1_len:%v", i, len(set1.Ops()))
 	}
 	timer.Stop()
 
@@ -106,10 +107,10 @@ func TestOpQueueClose(t *testing.T) {
 		opq.Close() // calling close should release the call to opq.Dequeue()
 	})
 	set1, open := opq.Dequeue() //this call should hang until we call Close above.
-	assert.T(t, open == false, "expect:false got:%v", open)
-	assert.T(t, set1 == nil)
+	assert.Equal(t, false, open)
+	assert.True(t, nil == set1)
 	rt := time.Since(st)
-	assert.Tf(t, rt >= 10*time.Millisecond, "we shouldn't have returned until Close was called: returned after:%v", rt)
+	assert.True(t, rt >= 10*time.Millisecond, "we shouldn't have returned until Close was called: returned after:%v", rt)
 
 }
 
@@ -149,8 +150,8 @@ func TestOpQueueFullDepth(t *testing.T) {
 	})
 	for i := 0; i < succuess; i++ {
 		set1, open := opq.Dequeue()
-		assert.T(t, open)
-		assert.Tf(t, len(set1.Ops()) == 1, " at loop:%v set1_len:%v", i, len(set1.Ops()))
+		assert.True(t, open)
+		assert.Equal(t, 1, len(set1.Ops()), " at loop:%v set1_len:%v", i, len(set1.Ops()))
 	}
 	timer.Stop()
 }
@@ -194,8 +195,8 @@ func TestOpQueueFullWidth(t *testing.T) {
 
 	found := 0
 	set1, open := opq.Dequeue()
-	assert.T(t, open)
-	assert.Tf(t, len(set1.Ops()) == 10, " at loop:%v set1_len:%v", succuess, len(set1.Ops())) // max width is 10, so we should get 10 in the first batch
+	assert.True(t, open)
+	assert.Equal(t, 10, len(set1.Ops()), " at loop:%v set1_len:%v", succuess, len(set1.Ops())) // max width is 10, so we should get 10 in the first batch
 	found += len(set1.Ops())
 
 	timer.Stop()
@@ -267,7 +268,7 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 					return
 				default:
 				}
-				assert.T(t, open)
+				assert.True(t, open)
 				dequeueCnt.IncrBy(len(set1.Ops()))
 				if len(set1.Ops()) > 1 {
 					mergeCnt.Incr()
