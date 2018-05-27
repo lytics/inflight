@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bmizerany/assert"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestCompletion(t *testing.T) {
@@ -20,14 +20,14 @@ func TestCompletion(t *testing.T) {
 	op1 := cg.Add(1, &tsMsg{123, 5, "user", 1234567})
 	op2 := cg.Add(2, &tsMsg{123, 5, "user", 2222222})
 
-	assert.T(t, completed == 0)
-	assert.T(t, reslen == 0)
+	assert.Equal(t, 0, completed)
+	assert.Equal(t, 0, reslen)
 	op1.Finish(nil, nil)
-	assert.T(t, completed == 0)
-	assert.T(t, reslen == 0)
+	assert.Equal(t, 0, completed)
+	assert.Equal(t, 0, reslen)
 	op2.Finish(nil, nil)
-	assert.T(t, completed == 1)
-	assert.T(t, reslen == 2)
+	assert.Equal(t, 1, completed)
+	assert.Equal(t, 2, reslen)
 }
 
 func TestConcurrentDone(t *testing.T) {
@@ -60,8 +60,8 @@ func TestConcurrentDone(t *testing.T) {
 	wgstart.Done() //start all go routines at the same time.
 	wgend.Wait()
 
-	assert.T(t, completed == 1)
-	assert.T(t, reslen == 1000)
+	assert.Equal(t, 1, completed)
+	assert.Equal(t, 1000, reslen)
 }
 
 type tsMsg struct {
