@@ -169,22 +169,22 @@ func (q *OpQueue) Dequeue() (*OpSet, bool) {
 	for {
 		if set, ok := q.dequeue(); ok {
 			return set, true
-		} else {
-			select {
-			case <-q.ctx.Done():
-				return nil, false
-			default:
-			}
-			//release the lock and wait until signaled.  On awake we'll require the lock.
-			// After wait requires the lock we have to recheck the wait condition
-			// (calling q.dequeue), because it's possible that someone else
-			// drained the queue while, we were reacquiring the lock.
-			q.cond.Wait()
-			select {
-			case <-q.ctx.Done():
-				return nil, false
-			default:
-			}
+		}
+
+		select {
+		case <-q.ctx.Done():
+			return nil, false
+		default:
+		}
+		// release the lock and wait until signaled.  On awake we'll require the lock.
+		// After wait requires the lock we have to recheck the wait condition
+		// (calling q.dequeue), because it's possible that someone else
+		// drained the queue while, we were reacquiring the lock.
+		q.cond.Wait()
+		select {
+		case <-q.ctx.Done():
+			return nil, false
+		default:
 		}
 	}
 }
