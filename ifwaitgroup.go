@@ -4,31 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 )
-
-type atomicBool struct {
-	Flag int32
-}
-
-func (b *atomicBool) Set(value bool) {
-	var i int32 = 0
-	if value {
-		i = 1
-	}
-	atomic.StoreInt32(&(b.Flag), int32(i))
-}
-
-func (b *atomicBool) Get() bool {
-	if atomic.LoadInt32(&(b.Flag)) != 0 {
-		return true
-	}
-	return false
-}
 
 type Wg struct {
 	cond   *sync.Cond
-	closed *atomicBool
+	closed bool
 
 	waiters int
 }
@@ -37,7 +17,7 @@ func NewWg() *Wg {
 	cond := sync.NewCond(&sync.Mutex{})
 	return &Wg{
 		cond:   cond,
-		closed: &atomicBool{},
+		closed: false,
 	}
 }
 
@@ -45,14 +25,13 @@ var ErrClosed = fmt.Errorf("closed")
 var ErrNegWg = fmt.Errorf("neg wg")
 
 func (wg *Wg) Inc() error {
-	if wg.closed.Get() == true {
-		return ErrClosed
-	}
-
 	wg.cond.L.Lock()
 	defer wg.cond.L.Unlock()
+
+	if wg.closed == true {
+		return ErrClosed
+	}
 	wg.waiters++
-	wg.cond.Signal()
 	return nil
 }
 
@@ -60,22 +39,33 @@ func (wg *Wg) Dec() error {
 	wg.cond.L.Lock()
 	defer wg.cond.L.Unlock()
 	wg.waiters--
-	//what if this is negative??
+	if wg.waiters < 0 {
+		wg.cond.Signal()
+		return ErrNegWg
+	}
 	wg.cond.Signal()
 	return nil
 }
 
 func (wg *Wg) Wait(ctx context.Context) error {
+	exited := make(chan struct{})
+	defer close(exited)
+
 	wg.cond.L.Lock()
 	defer wg.cond.L.Unlock()
 
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-exited:
+			return
+		}
 		wg.cond.L.Lock()
 		defer wg.cond.L.Unlock()
 		wg.cond.Signal() // after the context is Done, we'll signal the Wait loop so it can wake up and check the ctx
 	}()
 
+	wg.closed = true
 	for {
 		if wg.waiters == 0 {
 			return nil
