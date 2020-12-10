@@ -3,22 +3,11 @@ package inflight
 import (
 	"container/list"
 	"context"
-	"fmt"
 	"sync"
+	"time"
 )
 
-var (
-	// ErrQueueSaturatedDepth is the error returned when the queue has reached
-	// it's max queue depth
-	ErrQueueSaturatedDepth = fmt.Errorf("queue is saturated (depth)")
-
-	// ErrQueueSaturatedWidth is the error returned when a OpSet (aka a row) with
-	// in the queue has reached it's max width.  This happens when one submits
-	// many duplicate IDs.
-	ErrQueueSaturatedWidth = fmt.Errorf("queue is saturated (width)")
-)
-
-// OpQueue is a thread-safe duplicate operation suppression queue, that combines
+// OpWindow is a thread-safe duplicate operation suppression queue, that combines
 // duplicate operations (queue entires) into sets that will be dequeued together.
 //
 // For example, If you enqueue an item with a key that already exists, then that
@@ -28,7 +17,7 @@ var (
 // On Dequeue a SET is returned of all items that share a key in the queue.
 // It blocks on dequeue if the queue is empty, but returns an error if the
 // queue is full during enqueue.
-type OpQueue struct {
+type OpWindow struct {
 	cond *sync.Cond
 	ctx  context.Context
 	can  context.CancelFunc
@@ -39,11 +28,11 @@ type OpQueue struct {
 	entries map[ID]*OpSet
 }
 
-// NewOpQueue create a new OpQueue.
-func NewOpQueue(depth, width int) *OpQueue {
+// NewOpWindow create a new OpWindow.  Close by calling Close or cancaling the provided context.
+func NewOpWindow(ctx context.Context, depth, width int, windowedBy time.Duration) *OpWindow {
 	cond := sync.NewCond(&sync.Mutex{})
-	myctx, can := context.WithCancel(context.Background())
-	q := &OpQueue{
+	myctx, can := context.WithCancel(ctx)
+	q := &OpWindow{
 		cond:    cond,
 		ctx:     myctx,
 		can:     can,
@@ -62,14 +51,14 @@ func NewOpQueue(depth, width int) *OpQueue {
 }
 
 // Close releases resources associated with this callgroup, by canceling the context.
-// The owner of this OpQueue should either call Close or cancel the context, both are
+// The owner of this OpWindow should either call Close or cancel the context, both are
 // equivalent.
-func (q *OpQueue) Close() {
+func (q *OpWindow) Close() {
 	q.can()
 }
 
 // Len returns the number of uniq IDs in the queue, that is the depth of the queue.
-func (q *OpQueue) Len() int {
+func (q *OpWindow) Len() int {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 	return q.q.Len()
@@ -81,7 +70,7 @@ func (q *OpQueue) Len() int {
 //
 // Enqueue doesn't block if the queue if full, instead it returns a ErrQueueSaturated
 // error.
-func (q *OpQueue) Enqueue(id ID, op *Op) error {
+func (q *OpWindow) Enqueue(id ID, op *Op) error {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 
@@ -128,9 +117,9 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 // Dequeue will block if the Queue is empty.  An Enqueue will wake the
 // go routine up and it will continue on.
 //
-// If the OpQueue is closed, then Dequeue will return false
+// If the OpWindow is closed, then Dequeue will return false
 // for the second parameter.
-func (q *OpQueue) Dequeue() (*OpSet, bool) {
+func (q *OpWindow) Dequeue() (*OpSet, bool) {
 	q.cond.L.Lock()
 	defer q.cond.L.Unlock()
 
@@ -157,11 +146,11 @@ func (q *OpQueue) Dequeue() (*OpSet, bool) {
 	}
 }
 
-func (q *OpQueue) enqueue(id ID) {
+func (q *OpWindow) enqueue(id ID) {
 	q.q.PushBack(id)
 }
 
-func (q *OpQueue) dequeue() (*OpSet, bool) {
+func (q *OpWindow) dequeue() (*OpSet, bool) {
 	elem := q.q.Front()
 	if elem == nil {
 		return nil, false
