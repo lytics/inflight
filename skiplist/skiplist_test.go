@@ -13,22 +13,16 @@ const (
 	maxN = 1000000
 )
 
-type Element int
+type Element uint64
 
-func (e Element) ExtractKey() float64 {
-	return float64(e)
+func (e Element) ExtractID() uint64 {
+	return uint64(e)
+}
+func (e Element) Element() interface{} {
+	return e
 }
 func (e Element) String() string {
 	return fmt.Sprintf("%03d", e)
-}
-
-type FloatElement float64
-
-func (e FloatElement) ExtractKey() float64 {
-	return float64(e)
-}
-func (e FloatElement) String() string {
-	return fmt.Sprintf("%.3f", e)
 }
 
 type ComplexElement struct {
@@ -36,8 +30,11 @@ type ComplexElement struct {
 	S string
 }
 
-func (e ComplexElement) ExtractKey() float64 {
-	return float64(e.E)
+func (e ComplexElement) ExtractID() uint64 {
+	return uint64(e.E)
+}
+func (e ComplexElement) Element() interface{} {
+	return e.E
 }
 func (e ComplexElement) String() string {
 	return fmt.Sprintf("%03d", e.E)
@@ -155,63 +152,61 @@ func TestDelete(t *testing.T) {
 }
 
 func TestFindGreaterOrEqual(t *testing.T) {
-	eps := 0.00000001
-	maxNumber := 1000.0
+	maxNumber := 1000
 
 	var list SkipList
 	var listPointer *SkipList
 
 	// Test on empty list.
-	if _, ok := listPointer.FindGreaterOrEqual(FloatElement(0)); ok {
+	if _, ok := listPointer.FindGreaterOrEqual(Element(0)); ok {
 		t.Fail()
 	}
 
-	list = NewEps(eps)
+	list = New()
 
+	largestN := int64(math.MinInt64)
 	for i := 0; i < maxN; i++ {
-		list.Insert(FloatElement(rand.Float64() * maxNumber))
+		n := int64(rand.Int() * maxNumber)
+		if largestN < n {
+			largestN = n
+		}
+		list.Insert(Element(n))
 	}
 
-	first := float64(list.GetSmallestNode().GetValue().(FloatElement))
+	first := list.GetSmallestNode().GetValue().(Element)
 
 	// Find the very first element. This is a special case in the implementation that needs testing!
-	if v, ok := list.FindGreaterOrEqual(FloatElement(first - 2.0*eps)); ok {
-		// We found an element different to the first one!
-		if math.Abs(float64(v.GetValue().(FloatElement))-first) > eps {
-			t.Fail()
+	if v, ok := list.FindGreaterOrEqual(Element(first - 2)); ok {
+		element := v.GetValue().(Element)
+		if first != element {
+			t.Logf("We found an element different to the first one: expected:%v found:%v", first, element)
+			t.FailNow()
 		}
 	} else {
-		// No element found.
-		t.Fail()
+		t.Logf("No element found for first-2.")
+		t.FailNow()
 	}
 
 	for i := 0; i < maxN; i++ {
-		f := rand.Float64() * maxNumber
-		if v, ok := list.FindGreaterOrEqual(FloatElement(f)); ok {
+		findV := Element(rand.Int() * maxNumber)
+		if v, ok := list.FindGreaterOrEqual(Element(findV)); ok {
 			// if f is v should be bigger than the element before
-			lastV := float64(list.Prev(v).GetValue().(FloatElement))
-			thisV := float64(v.GetValue().(FloatElement))
-			isFirst := math.Abs(first-thisV) <= eps
-			if !isFirst && lastV >= f {
-				fmt.Printf("PrevV: %.8f\n    f: %.8f\n\n", lastV, f)
-				t.Fail()
-			}
-			// v should be bigger or equal to f
-			// If we compare directly, we get an equal key with a difference on the 10th decimal point, which fails.
-			if f-thisV > eps {
-				fmt.Printf("f: %.8f\nv: %.8f\n\n", f, thisV)
+			lastV := list.Prev(v).GetValue().(Element)
+			thisV := v.GetValue().(Element)
+			isFirst := first == thisV
+			if !isFirst && lastV >= findV {
+				t.Logf("\nlastV: %v\nfindV: %v\n\n", lastV, findV)
 				t.Fail()
 			}
 		} else {
-			lastV := float64(list.GetLargestNode().GetValue().(FloatElement))
+			lastV := list.GetLargestNode().GetValue().(Element)
 			// It is OK, to fail, as long as f is bigger than the last element.
-			if f <= lastV {
-				fmt.Printf("lastV: %.8f\n    f: %.8f\n\n", lastV, f)
+			if findV <= lastV {
+				t.Logf("\nlastV: %v\nfindV: %v\n\n", lastV, findV)
 				t.Fail()
 			}
 		}
 	}
-
 }
 
 func TestPrev(t *testing.T) {
@@ -362,5 +357,55 @@ func TestInfiniteLoop(t *testing.T) {
 
 	if _, ok := list.FindGreaterOrEqual(Element(2)); ok {
 		t.Fail()
+	}
+}
+
+func BenchmarkMapInsert(b *testing.B) {
+	m := map[Element]Element{}
+	for n := 0; n < b.N*1000000; n++ {
+		e := Element(n)
+		m[Element(n)] = e
+	}
+}
+
+func BenchmarkSkipListInsert(b *testing.B) {
+	list := New()
+	for n := 0; n < b.N*1000000; n++ {
+		e := Element(n)
+		list.Insert(e)
+	}
+}
+
+func BenchmarkMapFind(b *testing.B) {
+	m := map[Element]Element{}
+	max := b.N * 1000000
+	for n := 0; n < max; n++ {
+		e := Element(n)
+		m[Element(n)] = e
+	}
+
+	b.ResetTimer()
+	for n := 0; n < max; n++ {
+		if _, ok := m[Element(n)]; !ok {
+			b.Logf("failed to find %v", n)
+			b.FailNow()
+		}
+	}
+}
+
+func BenchmarkSkipListFind(b *testing.B) {
+	list := New()
+	max := b.N * 1000000
+	for n := 0; n < max; n++ {
+		e := Element(n)
+		list.Insert(e)
+	}
+
+	b.ResetTimer()
+	for n := 0; n < max; n++ {
+		if _, ok := list.Find(Element(n)); !ok {
+			b.Logf("failed to find %v", n)
+			b.FailNow()
+		}
 	}
 }

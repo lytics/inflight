@@ -29,7 +29,6 @@ package skiplist
 
 import (
 	"fmt"
-	"math"
 	"math/bits"
 	"math/rand"
 	"time"
@@ -39,17 +38,14 @@ const (
 	// maxLevel denotes the maximum height of the skiplist. This height will keep the skiplist
 	// efficient for up to 34m entries. If there is a need for much more, please adjust this constant accordingly.
 	maxLevel = 25
-	eps      = 0.00001
 )
 
 // ListElement is the interface to implement for elements that are inserted into the skiplist.
 type ListElement interface {
-	// ExtractKey() returns a float64 representation of the key that is used for insertion/deletion/find. It needs to establish an order over all elements
-	ExtractKey() float64
-	// A string representation of the element. Can be used for pretty-printing the list. Otherwise just return an empty string.
+	// ExtractID() returns a int64 representation of the key that is used for insertion/deletion/find. It needs to establish an order over all elements
+	ExtractID() uint64
+	Element() interface{}
 	String() string
-
-	OpSet() *OpSet
 }
 
 // SkipListElement represents one actual Node in the skiplist structure.
@@ -57,7 +53,7 @@ type ListElement interface {
 type SkipListElement struct {
 	next  [maxLevel]*SkipListElement
 	level int
-	key   float64
+	key   uint64
 	value ListElement
 	prev  *SkipListElement
 }
@@ -70,13 +66,11 @@ type SkipList struct {
 	maxNewLevel  int
 	maxLevel     int
 	elementCount int
-	eps          float64
 }
 
 // NewSeedEps returns a new empty, initialized Skiplist.
 // Given a seed, a deterministic height/list behaviour can be achieved.
-// Eps is used to compare keys given by the ExtractKey() function on equality.
-func NewSeedEps(seed int64, eps float64) SkipList {
+func NewSeed(seed int64) SkipList {
 
 	// Initialize random number generator.
 	rand.Seed(seed)
@@ -88,27 +82,14 @@ func NewSeedEps(seed int64, eps float64) SkipList {
 		maxNewLevel:  maxLevel,
 		maxLevel:     0,
 		elementCount: 0,
-		eps:          eps,
 	}
 
 	return list
 }
 
-// NewEps returns a new empty, initialized Skiplist.
-// Eps is used to compare keys given by the ExtractKey() function on equality.
-func NewEps(eps float64) SkipList {
-	return NewSeedEps(time.Now().UTC().UnixNano(), eps)
-}
-
-// NewSeed returns a new empty, initialized Skiplist.
-// Given a seed, a deterministic height/list behaviour can be achieved.
-func NewSeed(seed int64) SkipList {
-	return NewSeedEps(seed, eps)
-}
-
 // New returns a new empty, initialized Skiplist.
 func New() SkipList {
-	return NewSeedEps(time.Now().UTC().UnixNano(), eps)
+	return NewSeed(time.Now().UTC().UnixNano())
 }
 
 // IsEmpty checks, if the skiplist is empty.
@@ -129,7 +110,7 @@ func (t *SkipList) generateLevel(maxLevel int) int {
 	return level
 }
 
-func (t *SkipList) findEntryIndex(key float64, level int) int {
+func (t *SkipList) findEntryIndex(key uint64, level int) int {
 	// Find good entry point so we don't accidentally skip half the list.
 	for i := t.maxLevel; i >= 0; i-- {
 		if t.startLevels[i] != nil && t.startLevels[i].key <= key || i <= level {
@@ -139,7 +120,7 @@ func (t *SkipList) findEntryIndex(key float64, level int) int {
 	return 0
 }
 
-func (t *SkipList) findExtended(key float64, findGreaterOrEqual bool) (foundElem *SkipListElement, ok bool) {
+func (t *SkipList) findExtended(key uint64, findGreaterOrEqual bool) (foundElem *SkipListElement, ok bool) {
 
 	foundElem = nil
 	ok = false
@@ -162,7 +143,7 @@ func (t *SkipList) findExtended(key float64, findGreaterOrEqual bool) (foundElem
 	}
 
 	for {
-		if math.Abs(currentNode.key-key) <= t.eps {
+		if currentNode.key == key {
 			foundElem = currentNode
 			ok = true
 			return
@@ -178,7 +159,7 @@ func (t *SkipList) findExtended(key float64, findGreaterOrEqual bool) (foundElem
 			if index > 0 {
 
 				// Early exit
-				if currentNode.next[0] != nil && math.Abs(currentNode.next[0].key-key) <= t.eps {
+				if currentNode.next[0] != nil && currentNode.next[0].key == key {
 					foundElem = currentNode.next[0]
 					ok = true
 					return
@@ -207,12 +188,12 @@ func (t *SkipList) Find(e ListElement) (elem *SkipListElement, ok bool) {
 		return
 	}
 
-	elem, ok = t.findExtended(e.ExtractKey(), false)
+	elem, ok = t.findExtended(e.ExtractID(), false)
 	return
 }
 
 // FindGreaterOrEqual finds the first element, that is greater or equal to the given ListElement e.
-// The comparison is done on the keys (So on ExtractKey()).
+// The comparison is done on the keys (So on ExtractID()).
 // FindGreaterOrEqual runs in approx. O(log(n))
 func (t *SkipList) FindGreaterOrEqual(e ListElement) (elem *SkipListElement, ok bool) {
 
@@ -220,7 +201,7 @@ func (t *SkipList) FindGreaterOrEqual(e ListElement) (elem *SkipListElement, ok 
 		return
 	}
 
-	elem, ok = t.findExtended(e.ExtractKey(), true)
+	elem, ok = t.findExtended(e.ExtractID(), true)
 	return
 }
 
@@ -234,7 +215,7 @@ func (t *SkipList) Delete(e ListElement) {
 		return
 	}
 
-	key := e.ExtractKey()
+	key := e.ExtractID()
 
 	index := t.findEntryIndex(key, 0)
 
@@ -250,7 +231,7 @@ func (t *SkipList) Delete(e ListElement) {
 		}
 
 		// Found and remove!
-		if nextNode != nil && math.Abs(nextNode.key-key) <= t.eps {
+		if nextNode != nil && nextNode.key == key {
 
 			if currentNode != nil {
 				currentNode.next[index] = nextNode.next[index]
@@ -312,7 +293,7 @@ func (t *SkipList) Insert(e ListElement) {
 	elem := &SkipListElement{
 		next:  [maxLevel]*SkipListElement{},
 		level: level,
-		key:   e.ExtractKey(),
+		key:   e.ExtractID(),
 		value: e,
 	}
 
@@ -462,11 +443,11 @@ func (t *SkipList) GetNodeCount() int {
 
 // ChangeValue can be used to change the actual value of a node in the skiplist
 // without the need of Deleting and reinserting the node again.
-// Be advised, that ChangeValue only works, if the actual key from ExtractKey() will stay the same!
+// Be advised, that ChangeValue only works, if the actual key from ExtractID() will stay the same!
 // ok is an indicator, wether the value is actually changed.
 func (t *SkipList) ChangeValue(e *SkipListElement, newValue ListElement) (ok bool) {
 	// The key needs to stay correct, so this is very important!
-	if (newValue.ExtractKey() - e.key) <= t.eps {
+	if newValue.ExtractID() == e.key {
 		e.value = newValue
 		ok = true
 	} else {
@@ -548,4 +529,9 @@ func (t *SkipList) String() string {
 	}
 	s += "\n"
 	return s
+}
+
+func abs(n int64) int64 {
+	y := n >> 63
+	return (n ^ y) - y
 }

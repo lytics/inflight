@@ -29,10 +29,11 @@ func TestOpQueue(t *testing.T) {
 		completed2++
 	})
 
-	op1_1 := cg1.Add(1, &tsMsg{123, 5, "user", 1234567})
-	op1_2 := cg1.Add(2, &tsMsg{111, 6, "user", 2222222})
-	op2_1 := cg2.Add(1, &tsMsg{123, 5, "user", 1234567})
-	op2_2 := cg2.Add(2, &tsMsg{111, 6, "user", 2222222})
+	now := time.Now()
+	op1_1 := cg1.Add(1, &tsMsg{123, now})
+	op1_2 := cg1.Add(2, &tsMsg{111, now})
+	op2_1 := cg2.Add(1, &tsMsg{123, now})
+	op2_2 := cg2.Add(2, &tsMsg{111, now})
 
 	opq := NewOpQueue(10, 10)
 	defer opq.Close()
@@ -85,9 +86,10 @@ func TestOpQueueClose(t *testing.T) {
 	})
 
 	opq := NewOpQueue(10, 10)
+	now := time.Now()
 
 	for i := 0; i < 9; i++ {
-		op := cg1.Add(uint64(i), &tsMsg{i, i, "user", 2222222})
+		op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
 		err := opq.Enqueue(op.Key, op)
 		assert.Equal(t, nil, err)
 	}
@@ -127,8 +129,10 @@ func TestOpQueueFullDepth(t *testing.T) {
 	succuess := 0
 	depthErrors := 0
 	widthErrors := 0
+	now := time.Now()
+
 	for i := 0; i < 100; i++ {
-		op := cg1.Add(uint64(i), &tsMsg{i, i, "user", 2222222})
+		op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
 		err := opq.Enqueue(op.Key, op)
 		switch err {
 		case nil:
@@ -171,8 +175,10 @@ func TestOpQueueFullWidth(t *testing.T) {
 	succuess := 0
 	depthErrors := 0
 	widthErrors := 0
+	now := time.Now()
+
 	for i := 0; i < 100; i++ {
-		op := cg1.Add(1, &tsMsg{i, i, "user", 2222222})
+		op := cg1.Add(1, &tsMsg{uint64(i), now})
 		err := opq.Enqueue(op.Key, op)
 		switch err {
 		case nil:
@@ -227,6 +233,8 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 	finishLine, finish := context.WithCancel(context.Background())
 	dequeFinishLine, deqFinish := context.WithCancel(context.Background())
 	const concurrency = 2
+	now := time.Now()
+
 	for w := 0; w < concurrency; w++ {
 		go func(w int) {
 			startingLine1.Wait()
@@ -237,7 +245,7 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 					return
 				default:
 				}
-				op := cg1.Add(uint64(i), &tsMsg{i, i, "user", 2222222})
+				op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
 				err := opq.Enqueue(op.Key, op)
 				switch err {
 				case nil:

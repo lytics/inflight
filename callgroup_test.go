@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -17,8 +18,10 @@ func TestCompletion(t *testing.T) {
 		reslen += len(finalState)
 	})
 
-	op1 := cg.Add(1, &tsMsg{123, 5, "user", 1234567})
-	op2 := cg.Add(2, &tsMsg{123, 5, "user", 2222222})
+	now := time.Now()
+
+	op1 := cg.Add(1, &tsMsg{123, now})
+	op2 := cg.Add(2, &tsMsg{123, now})
 
 	assert.Equal(t, 0, completed)
 	assert.Equal(t, 0, reslen)
@@ -41,8 +44,10 @@ func TestConcurrentDone(t *testing.T) {
 	})
 
 	ops := []*Op{}
+	now := time.Now()
+
 	for i := 0; i < 1000; i++ {
-		ops = append(ops, cg.Add(uint64(i), &tsMsg{123, 5, "user", uint64(i)}))
+		ops = append(ops, cg.Add(uint64(i), &tsMsg{123, now}))
 	}
 
 	wgend := sync.WaitGroup{}
@@ -65,8 +70,6 @@ func TestConcurrentDone(t *testing.T) {
 }
 
 type tsMsg struct {
-	Aid    int
-	Gen    int
-	Table  string
-	RefsID uint64
+	ID   uint64
+	Time time.Time
 }
