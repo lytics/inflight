@@ -163,11 +163,6 @@ func (q *OpWindow) Dequeue() (*OpSet, bool) {
 		// because it's possible that someone else
 		// drained the queue while, we were reacquiring the lock.
 		q.cond.Wait()
-		select {
-		case <-q.ctx.Done():
-			return nil, false
-		default:
-		}
 	}
 }
 

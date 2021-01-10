@@ -3,6 +3,7 @@ package inflight
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -311,4 +312,61 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 	//       opqueue_test.go:275: enqueue errors: 137075 mergedMsgs:2553 enqueueCnt:231437 dequeueCnt:231437 rate:115718 msgs/sec
 	//       Over 100k msg a sec is more than fast enough for linkgrid...
 	t.Logf("enqueue errors: [depth:%v width:%v] mergedMsgs:%v enqueueCnt:%v dequeueCnt:%v rate:%v msgs/sec", depthErrorCnt.Get(), widthErrorCnt.Get(), mergeCnt.Get(), enq, deq, enq/runtime)
+}
+
+func TestOpWindowCloseConcurrent(t *testing.T) {
+	t.Parallel()
+
+	cg1 := NewCallGroup(func(finalState map[ID]*Response) {})
+	cg2 := NewCallGroup(func(finalState map[ID]*Response) {})
+
+	now := time.Now()
+
+	op1_1 := cg1.Add(1, &tsMsg{123, now})
+	op1_2 := cg1.Add(2, &tsMsg{111, now})
+	op2_1 := cg2.Add(1, &tsMsg{123, now})
+	op2_2 := cg2.Add(2, &tsMsg{111, now})
+
+	oq := NewOpQueue(300, 500)
+
+	var ops uint64
+	var closes uint64
+	const workers int = 12
+	for i := 0; i < workers; i++ {
+		go func() {
+			for {
+				e, ok := oq.Dequeue()
+				if e != nil {
+					assert.True(t, ok)
+					atomic.AddUint64(&ops, 1)
+				} else {
+					assert.False(t, ok)
+					break
+				}
+			}
+			atomic.AddUint64(&closes, 1)
+		}()
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, uint64(0), atomic.LoadUint64(&ops)) // nothing should have been dequeued yet
+	assert.Equal(t, uint64(0), atomic.LoadUint64(&closes))
+
+	err := oq.Enqueue(op1_1.Key, op1_1)
+	assert.Equal(t, nil, err)
+	err = oq.Enqueue(op2_1.Key, op2_1)
+	assert.Equal(t, nil, err)
+	err = oq.Enqueue(op1_2.Key, op1_2)
+	assert.Equal(t, nil, err)
+	err = oq.Enqueue(op2_2.Key, op2_2)
+	assert.Equal(t, nil, err)
+
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, uint64(2), atomic.LoadUint64(&ops)) // 2 uniq keys are enqueued
+	assert.Equal(t, uint64(0), atomic.LoadUint64(&closes))
+
+	oq.Close()
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, uint64(2), atomic.LoadUint64(&ops)) // we still only had 2 uniq keys seen
+	assert.Equal(t, uint64(workers), atomic.LoadUint64(&closes))
 }
