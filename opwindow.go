@@ -104,7 +104,9 @@ func (q *OpWindow) Enqueue(id ID, op *Op) error {
 
 	set, ok := q.entries[id]
 	if !ok {
-		set = newOpSet()
+		set = newOpSet(op)
+		q.entries[id] = set
+
 		// This is a new item, so we need to insert it into the queue.
 		q.enqueue(id)
 
@@ -126,15 +128,11 @@ func (q *OpWindow) Enqueue(id ID, op *Op) error {
 		// the condition lock until this method call returns, finishing
 		// its append of the new operation.
 		q.cond.Signal()
-	}
-
-	if len(set.Ops()) >= q.width {
+	} else if len(set.Ops()) >= q.width {
 		return ErrQueueSaturatedWidth
+	} else {
+		set.append(op)
 	}
-
-	set.append(op)
-	q.entries[id] = set
-
 	return nil
 }
 

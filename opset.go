@@ -10,9 +10,9 @@ type OpSet struct {
 	enqueuedAt time.Time
 }
 
-func newOpSet() *OpSet {
+func newOpSet(op *Op) *OpSet {
 	return &OpSet{
-		set: []*Op{},
+		set: []*Op{op},
 	}
 }
 

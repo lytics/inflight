@@ -311,7 +311,9 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 	// NOTE: I get the following performance on my laptop:
 	//       opqueue_test.go:275: enqueue errors: 137075 mergedMsgs:2553 enqueueCnt:231437 dequeueCnt:231437 rate:115718 msgs/sec
 	//       Over 100k msg a sec is more than fast enough for linkgrid...
-	t.Logf("enqueue errors: [depth:%v width:%v] mergedMsgs:%v enqueueCnt:%v dequeueCnt:%v rate:%v msgs/sec", depthErrorCnt.Get(), widthErrorCnt.Get(), mergeCnt.Get(), enq, deq, enq/runtime)
+	t.Logf("Run Stats [note errors are expect for this test]")
+	t.Logf("  enqueue errors:[depth-errs:%v width-errs:%v]", depthErrorCnt.Get(), widthErrorCnt.Get())
+	t.Logf("  mergedMsgs:%v enqueueCnt:%v dequeueCnt:%v rate:%v msgs/sec", mergeCnt.Get(), enq, deq, enq/runtime)
 }
 
 func TestOpWindowCloseConcurrent(t *testing.T) {
@@ -322,10 +324,8 @@ func TestOpWindowCloseConcurrent(t *testing.T) {
 
 	now := time.Now()
 
-	op1_1 := cg1.Add(1, &tsMsg{123, now})
-	op1_2 := cg1.Add(2, &tsMsg{111, now})
-	op2_1 := cg2.Add(1, &tsMsg{123, now})
-	op2_2 := cg2.Add(2, &tsMsg{111, now})
+	op1 := cg1.Add(1, &tsMsg{123, now})
+	op2 := cg2.Add(2, &tsMsg{321, now})
 
 	oq := NewOpQueue(300, 500)
 
@@ -348,25 +348,21 @@ func TestOpWindowCloseConcurrent(t *testing.T) {
 		}()
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, uint64(0), atomic.LoadUint64(&ops)) // nothing should have been dequeued yet
 	assert.Equal(t, uint64(0), atomic.LoadUint64(&closes))
 
-	err := oq.Enqueue(op1_1.Key, op1_1)
+	err := oq.Enqueue(op1.Key, op1)
 	assert.Equal(t, nil, err)
-	err = oq.Enqueue(op2_1.Key, op2_1)
-	assert.Equal(t, nil, err)
-	err = oq.Enqueue(op1_2.Key, op1_2)
-	assert.Equal(t, nil, err)
-	err = oq.Enqueue(op2_2.Key, op2_2)
+	err = oq.Enqueue(op2.Key, op2)
 	assert.Equal(t, nil, err)
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, uint64(2), atomic.LoadUint64(&ops)) // 2 uniq keys are enqueued
 	assert.Equal(t, uint64(0), atomic.LoadUint64(&closes))
 
 	oq.Close()
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	assert.Equal(t, uint64(2), atomic.LoadUint64(&ops)) // we still only had 2 uniq keys seen
 	assert.Equal(t, uint64(workers), atomic.LoadUint64(&closes))
 }

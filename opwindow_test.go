@@ -47,7 +47,7 @@ func TestOpWindow(t *testing.T) {
 			window := NewOpWindow(context.Background(), 3, 3, winTime)
 
 			defer window.Close()
-
+			st := time.Now()
 			{
 				err := window.Enqueue(op1_1.Key, op1_1)
 				assert.Equal(t, nil, err)
@@ -59,7 +59,6 @@ func TestOpWindow(t *testing.T) {
 				assert.Equal(t, nil, err)
 			}
 
-			st := time.Now()
 			require.Equal(t, 2, window.Len()) // only 2 unique keys
 
 			_, ok := window.Dequeue()
