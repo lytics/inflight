@@ -18,46 +18,13 @@ var (
 	ErrQueueSaturatedWidth = fmt.Errorf("queue is saturated (width)")
 )
 
-// OpSet represents the set of Ops that have been merged in an OpQueue,
-// It provides convenience functions for appending new Ops and for completing them.
-type OpSet struct {
-	set []*Op
-}
-
-func newOpSet() *OpSet {
-	return &OpSet{
-		set: []*Op{},
-	}
-}
-
-func (os *OpSet) append(op *Op) {
-	os.set = append(os.set, op)
-}
-
-// Ops get the list of ops in this set.
-func (os *OpSet) Ops() []*Op {
-	return os.set
-}
-
-// FinishAll a convenience func that calls finish on each Op in the set, passing the
-// results or error to all the Ops in the OpSet.
-//
-// NOTE: The call group that owns this OP will not call it's finish function until all
-// Ops are complete.  And one callgroup could be spread over multiple op sets or
-// multiple op queues.
-func (os *OpSet) FinishAll(err error, resp interface{}) {
-	for _, op := range os.set {
-		op.Finish(err, resp)
-	}
-}
-
 // OpQueue is a thread-safe duplicate operation suppression queue, that combines
 // duplicate operations (queue entires) into sets that will be dequeued together.
-
+//
 // For example, If you enqueue an item with a key that already exists, then that
 // item will be appended to that key's set of items. Otherwise the item is
 // inserted into the head of the list as a new item.
-
+//
 // On Dequeue a SET is returned of all items that share a key in the queue.
 // It blocks on dequeue if the queue is empty, but returns an error if the
 // queue is full during enqueue.
@@ -72,6 +39,7 @@ type OpQueue struct {
 	entries map[ID]*OpSet
 }
 
+// NewOpQueue create a new OpQueue.
 func NewOpQueue(depth, width int) *OpQueue {
 	cond := sync.NewCond(&sync.Mutex{})
 	myctx, can := context.WithCancel(context.Background())
@@ -123,7 +91,9 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 
 	set, ok := q.entries[id]
 	if !ok {
-		set = newOpSet()
+		set = newOpSet(op)
+		q.entries[id] = set
+
 		// This is a new item, so we need to insert it into the queue.
 		q.enqueue(id)
 
@@ -144,15 +114,11 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 		// the condition lock until this method call returns, finishing
 		// its append of the new operation.
 		q.cond.Signal()
-	}
-
-	if len(set.Ops()) >= q.width {
+	} else if len(set.Ops()) >= q.width {
 		return ErrQueueSaturatedWidth
+	} else {
+		set.append(op)
 	}
-
-	set.append(op)
-	q.entries[id] = set
-
 	return nil
 }
 
@@ -176,16 +142,11 @@ func (q *OpQueue) Dequeue() (*OpSet, bool) {
 			return nil, false
 		default:
 		}
-		// release the lock and wait until signaled.  On awake we'll require the lock.
-		// After wait requires the lock we have to recheck the wait condition
-		// (calling q.dequeue), because it's possible that someone else
+		// release the lock and wait until signaled.  On awake we'll acquire the lock.
+		// After wait acquires the lock we have to recheck the wait condition,
+		// because it's possible that someone else
 		// drained the queue while, we were reacquiring the lock.
 		q.cond.Wait()
-		select {
-		case <-q.ctx.Done():
-			return nil, false
-		default:
-		}
 	}
 }
 
