@@ -104,11 +104,8 @@ func (q *OpWindow) Enqueue(id ID, op *Op) error {
 
 	set, ok := q.entries[id]
 	if !ok {
-		set = newOpSet(op)
-		q.entries[id] = set
-
 		// This is a new item, so we need to insert it into the queue.
-		q.enqueue(id)
+		q.newEntry(id, op)
 
 		// Signal one waiting go routine to wake up and Dequeue
 		// I believe we only need to signal if we enqueue a new item.
@@ -169,7 +166,10 @@ type queElement struct {
 	enqueuedAtUnixN int64
 }
 
-func (q *OpWindow) enqueue(id ID) {
+func (q *OpWindow) newEntry(id ID, op *Op) {
+	set := newOpSet(op)
+	q.entries[id] = set
+
 	eq := &queElement{id, time.Now().UnixNano()}
 	q.q.PushBack(eq)
 }
