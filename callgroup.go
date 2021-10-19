@@ -59,11 +59,6 @@ func (cg *CallGroup) Add(k uint64, msg interface{}) *Op {
 	return op
 }
 
-// Used to by the package to extract the active ops for this callgroup.
-func (cg *CallGroup) ops() map[ID]*Op {
-	return cg.outstandingOps
-}
-
 func (cg *CallGroup) done() {
 	if len(cg.outstandingOps) > 0 {
 		return
