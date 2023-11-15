@@ -200,11 +200,9 @@ func TestOpQueueFullWidth(t *testing.T) {
 		t.Fatalf("testcase timed out after 5 secs.")
 	})
 
-	found := 0
 	set1, open := opq.Dequeue()
 	assert.True(t, open)
 	assert.Equal(t, 10, len(set1.Ops()), " at loop:%v set1_len:%v", succuess, len(set1.Ops())) // max width is 10, so we should get 10 in the first batch
-	found += len(set1.Ops())
 
 	timer.Stop()
 }
@@ -256,7 +254,7 @@ func TestOpQueueForRaceDetection(t *testing.T) {
 				case ErrQueueSaturatedWidth:
 					widthErrorCnt.Incr()
 				default:
-					t.Fatalf("unexpected error: %v", err)
+					t.Errorf("unexpected error: %v", err)
 				}
 			}
 		}(w)
