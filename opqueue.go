@@ -2,20 +2,20 @@ package inflight
 
 import (
 	"container/list"
-	"context"
-	"fmt"
+	"errors"
 	"sync"
 )
 
 var (
 	// ErrQueueSaturatedDepth is the error returned when the queue has reached
 	// it's max queue depth
-	ErrQueueSaturatedDepth = fmt.Errorf("queue is saturated (depth)")
+	ErrQueueSaturatedDepth = errors.New("queue is saturated (depth)")
 
 	// ErrQueueSaturatedWidth is the error returned when a OpSet (aka a row) with
 	// in the queue has reached it's max width.  This happens when one submits
 	// many duplicate IDs.
-	ErrQueueSaturatedWidth = fmt.Errorf("queue is saturated (width)")
+	ErrQueueSaturatedWidth = errors.New("queue is saturated (width)")
+	ErrQueueClosed         = errors.New("queue closed")
 )
 
 // OpQueue is a thread-safe duplicate operation suppression queue, that combines
@@ -29,49 +29,41 @@ var (
 // It blocks on dequeue if the queue is empty, but returns an error if the
 // queue is full during enqueue.
 type OpQueue struct {
-	cond *sync.Cond
-	ctx  context.Context
-	can  context.CancelFunc
-
+	mu      sync.Mutex
+	cond    sync.Cond
 	depth   int
 	width   int
 	q       *list.List
 	entries map[ID]*OpSet
+	closed  bool
 }
 
 // NewOpQueue create a new OpQueue.
 func NewOpQueue(depth, width int) *OpQueue {
-	cond := sync.NewCond(&sync.Mutex{})
-	myctx, can := context.WithCancel(context.Background())
-	q := &OpQueue{
-		cond:    cond,
-		ctx:     myctx,
-		can:     can,
+	q := OpQueue{
 		depth:   depth,
 		width:   width,
 		q:       list.New(),
 		entries: map[ID]*OpSet{},
 	}
-	go func() {
-		<-myctx.Done()
-		q.cond.L.Lock()
-		defer q.cond.L.Unlock()
-		cond.Broadcast() // alert all dequeue calls that they should wake up and return.
-	}()
-	return q
+	q.cond.L = &q.mu
+	return &q
 }
 
 // Close releases resources associated with this callgroup, by canceling the context.
 // The owner of this OpQueue should either call Close or cancel the context, both are
 // equivalent.
 func (q *OpQueue) Close() {
-	q.can()
+	q.mu.Lock()
+	q.closed = true
+	q.mu.Unlock()
+	q.cond.Broadcast() // alert all dequeue calls that they should wake up and return.
 }
 
 // Len returns the number of uniq IDs in the queue, that is the depth of the queue.
 func (q *OpQueue) Len() int {
-	q.cond.L.Lock()
-	defer q.cond.L.Unlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	return q.q.Len()
 }
 
@@ -82,9 +74,12 @@ func (q *OpQueue) Len() int {
 // Enqueue doesn't block if the queue if full, instead it returns a ErrQueueSaturated
 // error.
 func (q *OpQueue) Enqueue(id ID, op *Op) error {
-	q.cond.L.Lock()
-	defer q.cond.L.Unlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
 
+	if q.closed {
+		return ErrQueueClosed
+	}
 	if q.q.Len() >= q.depth {
 		return ErrQueueSaturatedDepth
 	}
@@ -111,11 +106,14 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 		// the condition lock until this method call returns, finishing
 		// its append of the new operation.
 		q.cond.Signal()
-	} else if len(set.Ops()) >= q.width {
-		return ErrQueueSaturatedWidth
-	} else {
-		set.append(op)
+		return nil
 	}
+	if len(set.Ops()) >= q.width {
+		return ErrQueueSaturatedWidth
+	}
+
+	// Q (2023-11) (mh): Why don't we signal here?
+	set.append(op)
 	return nil
 }
 
@@ -126,19 +124,17 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 // If the OpQueue is closed, then Dequeue will return false
 // for the second parameter.
 func (q *OpQueue) Dequeue() (*OpSet, bool) {
-	q.cond.L.Lock()
-	defer q.cond.L.Unlock()
+	q.mu.Lock()
+	defer q.mu.Unlock()
 
 	for {
 		if set, ok := q.dequeue(); ok {
 			return set, true
 		}
-
-		select {
-		case <-q.ctx.Done():
+		if q.closed {
 			return nil, false
-		default:
 		}
+
 		// release the lock and wait until signaled.  On awake we'll acquire the lock.
 		// After wait acquires the lock we have to recheck the wait condition,
 		// because it's possible that someone else
