@@ -112,7 +112,6 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 		return ErrQueueSaturatedWidth
 	}
 
-	// Q (2023-11) (mh): Why don't we signal here?
 	set.append(op)
 	return nil
 }
