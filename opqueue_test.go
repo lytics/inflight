@@ -146,17 +146,31 @@ func TestOpQueueFullDepth(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
-	assert.Equalf(t, succuess, 10, "expected 10, got:%v", succuess)
+	for i := 0; i < 10; i++ {
+		op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
+		err := opq.Enqueue(op.Key, op)
+		switch err {
+		case nil:
+			succuess++
+		case ErrQueueSaturatedDepth:
+			depthErrors++
+		case ErrQueueSaturatedWidth:
+			widthErrors++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	assert.Equalf(t, succuess, 20, "expected 10, got:%v", succuess)
 	assert.Equalf(t, depthErrors, 90, "expected 90, got:%v", depthErrors)
 	assert.Equalf(t, widthErrors, 0, "expected 0, got:%v", widthErrors)
 
 	timer := time.AfterFunc(5*time.Second, func() {
 		t.Fatalf("testcase timed out after 5 secs.")
 	})
-	for i := 0; i < succuess; i++ {
+	for i := 0; i < 10; i++ {
 		set1, open := opq.Dequeue()
 		assert.True(t, open)
-		assert.Equal(t, 1, len(set1.Ops()), " at loop:%v set1_len:%v", i, len(set1.Ops()))
+		assert.Equal(t, 2, len(set1.Ops()), " at loop:%v set1_len:%v", i, len(set1.Ops()))
 	}
 	timer.Stop()
 }
@@ -179,7 +193,7 @@ func TestOpQueueFullWidth(t *testing.T) {
 	now := time.Now()
 
 	for i := 0; i < 100; i++ {
-		op := cg1.Add(1, &tsMsg{uint64(i), now})
+		op := cg1.Add(0, &tsMsg{uint64(i), now})
 		err := opq.Enqueue(op.Key, op)
 		switch err {
 		case nil:
@@ -192,9 +206,23 @@ func TestOpQueueFullWidth(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
-	assert.Equalf(t, succuess, 10, "expected 10, got:%v", succuess)
-	assert.Equalf(t, depthErrors, 0, "expected 90, got:%v", depthErrors)
-	assert.Equalf(t, widthErrors, 90, "expected 0, got:%v", widthErrors)
+	for i := 1; i < 10; i++ {
+		op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
+		err := opq.Enqueue(op.Key, op)
+		switch err {
+		case nil:
+			succuess++
+		case ErrQueueSaturatedDepth:
+			depthErrors++
+		case ErrQueueSaturatedWidth:
+			widthErrors++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	assert.Equalf(t, succuess, 19, "expected 10, got:%v", succuess)
+	assert.Equalf(t, depthErrors, 0, "expected 0, got:%v", depthErrors)
+	assert.Equalf(t, widthErrors, 90, "expected 90, got:%v", widthErrors)
 
 	timer := time.AfterFunc(5*time.Second, func() {
 		t.Fatalf("testcase timed out after 5 secs.")
@@ -202,7 +230,12 @@ func TestOpQueueFullWidth(t *testing.T) {
 
 	set1, open := opq.Dequeue()
 	assert.True(t, open)
-	assert.Equal(t, 10, len(set1.Ops()), " at loop:%v set1_len:%v", succuess, len(set1.Ops())) // max width is 10, so we should get 10 in the first batch
+	assert.Equal(t, 10, len(set1.Ops()), " at loop:%v set1_len:%v", 0, len(set1.Ops())) // max width is 10, so we should get 10 in the first batch
+	for i := 1; i < 10; i++ {
+		set1, open := opq.Dequeue()
+		assert.True(t, open)
+		assert.Equal(t, 1, len(set1.Ops()), " at loop:%v set1_len:%v", i, len(set1.Ops()))
+	}
 
 	timer.Stop()
 }

@@ -80,13 +80,13 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 	if q.closed {
 		return ErrQueueClosed
 	}
-	if q.q.Len() >= q.depth {
-		return ErrQueueSaturatedDepth
-	}
 
 	set, ok := q.entries[id]
 	if !ok {
 		// This is a new item, so we need to insert it into the queue.
+		if q.q.Len() >= q.depth {
+			return ErrQueueSaturatedDepth
+		}
 		q.newEntry(id, op)
 
 		// Signal one waiting go routine to wake up and Dequeue
