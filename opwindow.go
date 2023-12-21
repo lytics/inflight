@@ -50,10 +50,9 @@ func NewOpWindow(depth, width int, windowedBy time.Duration) *OpWindow {
 
 // Close provides graceful shutdown: no new ops will be enqueued.
 func (q *OpWindow) Close() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	q.once.Do(func() {
+		q.mu.Lock()
+		defer q.mu.Unlock()
 		close(q.done)
 		// HACK (2023-12) (mh): Set depth to zero so new entries are rejected.
 		q.depth = 0
