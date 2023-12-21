@@ -1,13 +1,9 @@
 package inflight
 
-import "time"
-
 // OpSet represents the set of Ops that have been merged in an OpQueue,
 // It provides convenience functions for appending new Ops and for completing them.
 type OpSet struct {
 	set []*Op
-	// used by the opWindow determine when it's ok to dequeue
-	enqueuedAt time.Time
 }
 
 func newOpSet(op *Op) *OpSet {
