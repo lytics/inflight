@@ -13,9 +13,13 @@ import (
 // OpWindow provides back-pressure for both depth (i.e., number of entries in queue) and width (i.e., number of entries in a microbatch).
 // OpWindow is safe for concurrent use. Its zero value is not safe to use, use NewOpWindow().
 type OpWindow struct {
-	mu        sync.Mutex
-	emptyCond sync.Cond
-	fullCond  sync.Cond
+	mu sync.Mutex
+	q  list.List // *queueItem
+	m  map[ID]*queueItem
+
+	// These are selectable sync.Cond: use blocking read for Wait() and non-blocking write for Signal().
+	queueHasItems chan struct{}
+	queueHasSpace chan struct{}
 
 	once sync.Once
 	done chan struct{}
@@ -23,9 +27,6 @@ type OpWindow struct {
 	depth      int
 	width      int
 	windowedBy time.Duration
-
-	q list.List // *queueItem
-	m map[ID]*queueItem
 }
 
 // NewOpWindow creates a new OpWindow.
@@ -35,14 +36,14 @@ type OpWindow struct {
 //	windowedBy: window size.
 func NewOpWindow(depth, width int, windowedBy time.Duration) *OpWindow {
 	q := &OpWindow{
-		done:       make(chan struct{}),
-		depth:      depth,
-		width:      width,
-		windowedBy: windowedBy,
-		m:          make(map[ID]*queueItem),
+		queueHasItems: make(chan struct{}, 1),
+		queueHasSpace: make(chan struct{}, 1),
+		done:          make(chan struct{}),
+		depth:         depth,
+		width:         width,
+		windowedBy:    windowedBy,
+		m:             make(map[ID]*queueItem),
 	}
-	q.emptyCond.L = &q.mu
-	q.fullCond.L = &q.mu
 	q.q.Init()
 	return q
 }
@@ -54,41 +55,36 @@ func (q *OpWindow) Close() {
 
 	q.once.Do(func() {
 		close(q.done)
-		// alert all dequeue calls that they should wake up and return.
-		q.emptyCond.Broadcast()
-		q.fullCond.Broadcast()
+		// HACK (2023-12) (mh): Set depth to zero so new entries are rejected.
+		q.depth = 0
 	})
 }
 
 // Enqueue op into queue, blocking until first of: op is enqueued, ID has hit max width, context is done, or queue is closed.
 func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
-	select {
-	case <-q.done:
-		return ErrQueueClosed
-	default:
-	}
-
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.mu.Lock() // locked on returns below
 
 	for {
 		item, ok := q.m[id]
 		if ok {
 			if len(item.OpSet.set) >= q.width {
+				q.mu.Unlock()
 				return ErrQueueSaturatedWidth
 			}
 			item.OpSet.append(op)
+			q.mu.Unlock()
 			return nil
 		}
 
 		if q.q.Len() >= q.depth {
+			q.mu.Unlock()
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("%w: %w", ErrQueueSaturatedDepth, ctx.Err())
 			case <-q.done:
 				return ErrQueueClosed
-			default:
-				q.fullCond.Wait()
+			case <-q.queueHasSpace:
+				q.mu.Lock()
 				continue
 			}
 		}
@@ -100,8 +96,13 @@ func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
 		}
 		q.m[id] = item
 		q.q.PushBack(item)
+		q.mu.Unlock()
 
-		q.emptyCond.Signal()
+		select {
+		case q.queueHasItems <- struct{}{}:
+		default:
+		}
+
 		return nil
 	}
 }
@@ -109,20 +110,20 @@ func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
 // Dequeue removes and returns the oldest OpSet whose window has passed from the queue,
 // blocking until first of: OpSet is ready, context is canceled, or queue is closed.
 func (q *OpWindow) Dequeue(ctx context.Context) (*OpSet, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	q.mu.Lock() // unlocked on returns below
 
 	var item *queueItem
 	for item == nil {
 		elem := q.q.Front()
 		if elem == nil {
+			q.mu.Unlock()
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-q.done:
 				return nil, ErrQueueClosed
-			default:
-				q.emptyCond.Wait()
+			case <-q.queueHasItems:
+				q.mu.Lock()
 				continue
 			}
 
@@ -146,9 +147,13 @@ func (q *OpWindow) Dequeue(ctx context.Context) (*OpSet, error) {
 
 	ops := item.OpSet
 	delete(q.m, item.ID)
+	q.mu.Unlock()
 	item = nil // gc
 
-	q.fullCond.Signal()
+	select {
+	case q.queueHasSpace <- struct{}{}:
+	default:
+	}
 	return ops, nil
 }
 

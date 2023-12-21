@@ -159,22 +159,56 @@ func TestOpWindowErrQueueSaturatedDepth(t *testing.T) {
 	op2 := cg.Add(2, &tsMsg{234, now})
 
 	window := NewOpWindow(1, 1, time.Millisecond)
-	err := window.Enqueue(context.Background(), op1.Key, op1)
+	ctx := context.Background()
+	err := window.Enqueue(ctx, op1.Key, op1)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond) // let it run for a sec for coverage ¯\_(ツ)_/¯
+	ctx1, cancel := context.WithTimeout(ctx, time.Millisecond) // let it run for a sec for coverage ¯\_(ツ)_/¯
+	defer cancel()
+	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		<-ctx.Done()
-		// pretend we dequeued but were full again
-		window.fullCond.Signal()
+		<-ctx1.Done()
+		window.queueHasSpace <- struct{}{} // emulate queue having space then filling back up
+		cancel()
 	}()
+
 	err = window.Enqueue(ctx, op2.Key, op2)
 	require.ErrorIs(t, err, ErrQueueSaturatedDepth)
 
-	_, err = window.Dequeue(context.Background())
+	_, err = window.Dequeue(ctx)
 	require.NoError(t, err)
 
-	err = window.Enqueue(context.Background(), op2.Key, op2)
+	err = window.Enqueue(ctx, op2.Key, op2)
 	require.NoError(t, err)
+}
+
+func TestOpWindowErrQueueSaturatedDepthClose(t *testing.T) {
+	t.Parallel()
+	cg := NewCallGroup(func(map[ID]*Response) {})
+	now := time.Now()
+	op1 := cg.Add(1, &tsMsg{123, now})
+	op2 := cg.Add(2, &tsMsg{234, now})
+
+	window := NewOpWindow(1, 1, time.Millisecond)
+	ctx := context.Background()
+	err := window.Enqueue(ctx, op1.Key, op1)
+	require.NoError(t, err)
+
+	go func() {
+		time.Sleep(time.Millisecond)
+		window.Close()
+	}()
+
+	err = window.Enqueue(ctx, op2.Key, op2)
+	require.ErrorIs(t, err, ErrQueueClosed)
+}
+
+func TestOpWindowDequeueEmptyQueue(t *testing.T) {
+	t.Parallel()
+	window := NewOpWindow(1, 1, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := window.Dequeue(ctx)
+	require.ErrorIs(t, err, ctx.Err())
 }
