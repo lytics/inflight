@@ -8,17 +8,10 @@ import (
 	"time"
 )
 
-// OpWindow is a thread-safe duplicate operation suppression queue,
-// that combines duplicate operations (queue entires) into sets
-// that will be dequeued together.
-//
-// For example, if you enqueue an item with a key that already exists,
-// then that item will be appended to that key's set of items. Otherwise
-// the item is inserted into the back of the list as a new item.
-//
-// On Dequeue the oldest OpSet is returned, containing all items that share a key in the
-// queue. It blocks on dequeue if the queue is empty, but returns an
-// error if the queue is full during enqueue.
+// OpWindow is a windowed, microbatching priority queue.
+// Operations for the same ID and time window form a microbatch. Microbatches whose windows have passed are dequeued in FIFO order.
+// OpWindow provides back-pressure for both depth (i.e., number of entries in queue) and width (i.e., number of entries in a microbatch).
+// OpWindow is safe for concurrent use.
 type OpWindow struct {
 	mu        sync.Mutex
 	emptyCond sync.Cond
@@ -31,7 +24,7 @@ type OpWindow struct {
 	width      int
 	windowedBy time.Duration
 
-	q *list.List // *queueItem
+	q list.List // *queueItem
 	m map[ID]*queueItem
 }
 
@@ -41,58 +34,50 @@ func NewOpWindow(depth, width int, windowedBy time.Duration) *OpWindow {
 		done:       make(chan struct{}),
 		depth:      depth,
 		width:      width,
-		q:          list.New(),
-		m:          make(map[ID]*queueItem),
 		windowedBy: windowedBy,
+		m:          make(map[ID]*queueItem),
 	}
 	q.emptyCond.L = &q.mu
 	q.fullCond.L = &q.mu
+	q.q.Init()
 	return q
 }
 
-// Close provides graceful shutdown: no new ops can be enqueued and,
-// once drained, De
+// Close provides graceful shutdown: no new ops will be enqueued.
 func (q *OpWindow) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	q.once.Do(func() {
 		close(q.done)
-		q.windowedBy = 0 // turn off windowing so everything is dequeue
 		// alert all dequeue calls that they should wake up and return.
 		q.emptyCond.Broadcast()
 		q.fullCond.Broadcast()
 	})
 }
 
-// Len returns the number of uniq IDs in the queue, that is the depth of the
-// queue.
-func (q *OpWindow) Len() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.q.Len()
-}
-
-// Enqueue add the op to the queue.
-// If the ID already exists then the Op is added to the existing OpSet for this ID.
-// Otherwise if  it's inserted as
-// a new OpSet.
-//
-// Enqueue doesn't block if the queue if full, instead it returns a
-// ErrQueueSaturated error.
+// Enqueue op into queue, blocking until first of: op is enqueued, ID has hit max width, context is done, or queue is closed.
 func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
 	select {
 	case <-q.done:
 		return ErrQueueClosed
 	default:
 	}
 
-	item, ok := q.m[id]
-	if !ok {
-		for q.q.Len() >= q.depth {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for {
+		item, ok := q.m[id]
+		if ok {
+			if len(item.OpSet.set) >= q.width {
+				return ErrQueueSaturatedWidth
+			}
+			item.OpSet.append(op)
+			return nil
+		}
+
+		if q.q.Len() >= q.depth {
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("%w: %w", ErrQueueSaturatedDepth, ctx.Err())
@@ -100,11 +85,11 @@ func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
 				return ErrQueueClosed
 			default:
 				q.fullCond.Wait()
+				continue
 			}
 		}
-		// This is a new item, so we need to insert it into the queue.
 
-		item := &queueItem{
+		item = &queueItem{
 			ID:        id,
 			ProcessAt: time.Now().Add(q.windowedBy),
 			OpSet:     newOpSet(op),
@@ -115,20 +100,10 @@ func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
 		q.emptyCond.Signal()
 		return nil
 	}
-	if len(item.OpSet.set) >= q.width {
-		return ErrQueueSaturatedWidth
-	}
-
-	item.OpSet.append(op)
-	return nil
 }
 
-// Dequeue removes the oldest OpSet from the queue and returns it.
-// Dequeue will block if the Queue is empty.  An Enqueue will wake the
-// go routine up and it will continue on.
-//
-// If the OpWindow is closed, then Dequeue will return false
-// for the second parameter.
+// Dequeue removes and returns the oldest OpSet whose window has passed from the queue,
+// blocking until first of: OpSet is ready, context is canceled, or queue is closed.
 func (q *OpWindow) Dequeue(ctx context.Context) (*OpSet, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -154,6 +129,7 @@ func (q *OpWindow) Dequeue(ctx context.Context) (*OpSet, error) {
 	waitFor := time.Until(item.ProcessAt)
 	if waitFor > 0 {
 		q.mu.Unlock() // allow others to add to OpQueue while we wait
+		// NOTE (2023-12) (mh): Do we need to pool these?
 		timer := time.NewTimer(waitFor)
 		select {
 		case <-q.done:

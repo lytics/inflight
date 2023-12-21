@@ -46,21 +46,21 @@ func TestOpWindow(t *testing.T) {
 			op2_2 := cg2.Add(2, &tsMsg{111, now})
 
 			window := NewOpWindow(3, 3, winTime)
+			t.Cleanup(window.Close)
 
-			defer window.Close()
 			st := time.Now()
 			{
 				err := window.Enqueue(ctx, op1_1.Key, op1_1)
-				assert.Equal(t, nil, err)
+				require.NoError(t, err)
 				err = window.Enqueue(ctx, op2_1.Key, op2_1)
-				assert.Equal(t, nil, err)
+				require.NoError(t, err)
 				err = window.Enqueue(ctx, op1_2.Key, op1_2)
-				assert.Equal(t, nil, err)
+				require.NoError(t, err)
 				err = window.Enqueue(ctx, op2_2.Key, op2_2)
-				assert.Equal(t, nil, err)
+				require.NoError(t, err)
 			}
 
-			require.Equal(t, 2, window.Len()) // only 2 unique keys
+			require.Equal(t, 2, window.q.Len()) // only 2 unique keys
 
 			_, err := window.Dequeue(ctx)
 			assert.NoError(t, err)
@@ -92,13 +92,13 @@ func TestOpWindowClose(t *testing.T) {
 	window := NewOpWindow(3, 3, winTime)
 
 	err := window.Enqueue(ctx, op1_1.Key, op1_1)
-	assert.Equal(t, nil, err)
+	require.NoError(t, err)
 	err = window.Enqueue(ctx, op2_1.Key, op2_1)
-	assert.Equal(t, nil, err)
+	require.NoError(t, err)
 	err = window.Enqueue(ctx, op1_2.Key, op1_2)
-	assert.Equal(t, nil, err)
+	require.NoError(t, err)
 	err = window.Enqueue(ctx, op2_2.Key, op2_2)
-	assert.Equal(t, nil, err)
+	require.NoError(t, err)
 
 	var ops uint64
 	var closes uint64
