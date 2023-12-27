@@ -23,17 +23,18 @@ func TestOpWindow(t *testing.T) {
 		1 * time.Second,
 	}
 
-	for _, winTimeT := range winTimes {
-		winTime := winTimeT // scope it locally so it can be correctly captured
+	for _, winTime := range winTimes {
+		winTime := winTime // scope it locally so it can be correctly captured
 		t.Run(fmt.Sprintf("windowed_by_%v", winTime), func(t *testing.T) {
 			t.Parallel()
+			ctx := context.Background()
 			completed1 := 0
 			completed2 := 0
-			cg1 := NewCallGroup(func(finalState map[ID]*Response) {
+			cg1 := NewCallGroup(func(map[ID]*Response) {
 				completed1++
 			})
 
-			cg2 := NewCallGroup(func(finalState map[ID]*Response) {
+			cg2 := NewCallGroup(func(map[ID]*Response) {
 				completed2++
 			})
 
@@ -44,29 +45,29 @@ func TestOpWindow(t *testing.T) {
 			op2_1 := cg2.Add(1, &tsMsg{123, now})
 			op2_2 := cg2.Add(2, &tsMsg{111, now})
 
-			window := NewOpWindow(context.Background(), 3, 3, winTime)
+			window := NewOpWindow(3, 3, winTime)
+			t.Cleanup(window.Close)
 
-			defer window.Close()
 			st := time.Now()
 			{
-				err := window.Enqueue(op1_1.Key, op1_1)
-				assert.Equal(t, nil, err)
-				err = window.Enqueue(op2_1.Key, op2_1)
-				assert.Equal(t, nil, err)
-				err = window.Enqueue(op1_2.Key, op1_2)
-				assert.Equal(t, nil, err)
-				err = window.Enqueue(op2_2.Key, op2_2)
-				assert.Equal(t, nil, err)
+				err := window.Enqueue(ctx, op1_1.Key, op1_1)
+				require.NoError(t, err)
+				err = window.Enqueue(ctx, op2_1.Key, op2_1)
+				require.NoError(t, err)
+				err = window.Enqueue(ctx, op1_2.Key, op1_2)
+				require.NoError(t, err)
+				err = window.Enqueue(ctx, op2_2.Key, op2_2)
+				require.NoError(t, err)
 			}
 
-			require.Equal(t, 2, window.Len()) // only 2 unique keys
+			require.Equal(t, 2, window.q.Len()) // only 2 unique keys
 
-			_, ok := window.Dequeue()
-			assert.True(t, ok)
-			_, ok = window.Dequeue()
-			assert.True(t, ok)
+			_, err := window.Dequeue(ctx)
+			assert.NoError(t, err)
+			_, err = window.Dequeue(ctx)
+			assert.NoError(t, err)
 
-			rt := time.Now().Sub(st)
+			rt := time.Since(st)
 			assert.Greater(t, rt, winTime)
 		})
 	}
@@ -74,11 +75,12 @@ func TestOpWindow(t *testing.T) {
 
 func TestOpWindowClose(t *testing.T) {
 	t.Parallel()
+	ctx := context.Background()
 
 	winTime := 100 * time.Hour // we want everything to hang until we close the queue.
 
-	cg1 := NewCallGroup(func(finalState map[ID]*Response) {})
-	cg2 := NewCallGroup(func(finalState map[ID]*Response) {})
+	cg1 := NewCallGroup(func(map[ID]*Response) {})
+	cg2 := NewCallGroup(func(map[ID]*Response) {})
 
 	now := time.Now()
 
@@ -87,16 +89,16 @@ func TestOpWindowClose(t *testing.T) {
 	op2_1 := cg2.Add(1, &tsMsg{123, now})
 	op2_2 := cg2.Add(2, &tsMsg{111, now})
 
-	window := NewOpWindow(context.Background(), 3, 3, winTime)
+	window := NewOpWindow(3, 3, winTime)
 
-	err := window.Enqueue(op1_1.Key, op1_1)
-	assert.Equal(t, nil, err)
-	err = window.Enqueue(op2_1.Key, op2_1)
-	assert.Equal(t, nil, err)
-	err = window.Enqueue(op1_2.Key, op1_2)
-	assert.Equal(t, nil, err)
-	err = window.Enqueue(op2_2.Key, op2_2)
-	assert.Equal(t, nil, err)
+	err := window.Enqueue(ctx, op1_1.Key, op1_1)
+	require.NoError(t, err)
+	err = window.Enqueue(ctx, op2_1.Key, op2_1)
+	require.NoError(t, err)
+	err = window.Enqueue(ctx, op1_2.Key, op1_2)
+	require.NoError(t, err)
+	err = window.Enqueue(ctx, op2_2.Key, op2_2)
+	require.NoError(t, err)
 
 	var ops uint64
 	var closes uint64
@@ -104,16 +106,13 @@ func TestOpWindowClose(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			for {
-				e, ok := window.Dequeue()
-				if e != nil {
-					assert.True(t, ok)
-					atomic.AddUint64(&ops, 1)
-				} else {
-					assert.False(t, ok)
-					break
+				if _, err := window.Dequeue(ctx); err != nil {
+					require.ErrorIs(t, err, ErrQueueClosed)
+					atomic.AddUint64(&closes, 1)
+					return
 				}
+				atomic.AddUint64(&ops, 1)
 			}
-			atomic.AddUint64(&closes, 1)
 		}()
 	}
 
@@ -124,4 +123,92 @@ func TestOpWindowClose(t *testing.T) {
 	time.Sleep(1000 * time.Millisecond)
 	assert.Equal(t, uint64(workers), atomic.LoadUint64(&closes))
 	assert.Equal(t, uint64(2), atomic.LoadUint64(&ops)) // 2 uniq keys are enqueued
+
+	err = window.Enqueue(ctx, op1_1.Key, op1_1)
+	require.ErrorIs(t, err, ErrQueueClosed)
+}
+
+func TestOpWindowErrQueueSaturatedWidth(t *testing.T) {
+	t.Parallel()
+	cg := NewCallGroup(func(map[ID]*Response) {})
+	now := time.Now()
+
+	op1 := cg.Add(1, &tsMsg{123, now})
+	op2 := cg.Add(1, &tsMsg{123, now})
+
+	window := NewOpWindow(2, 1, time.Millisecond)
+	ctx := context.Background()
+	err := window.Enqueue(ctx, op1.Key, op1)
+	require.NoError(t, err)
+
+	err = window.Enqueue(ctx, op2.Key, op2)
+	require.ErrorIs(t, err, ErrQueueSaturatedWidth)
+
+	_, err = window.Dequeue(ctx)
+	require.NoError(t, err)
+
+	err = window.Enqueue(ctx, op2.Key, op2)
+	require.NoError(t, err)
+}
+
+func TestOpWindowErrQueueSaturatedDepth(t *testing.T) {
+	t.Parallel()
+	cg := NewCallGroup(func(map[ID]*Response) {})
+	now := time.Now()
+	op1 := cg.Add(1, &tsMsg{123, now})
+	op2 := cg.Add(2, &tsMsg{234, now})
+
+	window := NewOpWindow(1, 1, time.Millisecond)
+	ctx := context.Background()
+	err := window.Enqueue(ctx, op1.Key, op1)
+	require.NoError(t, err)
+
+	ctx1, cancel := context.WithTimeout(ctx, time.Millisecond) // let it run for a sec for coverage ¯\_(ツ)_/¯
+	defer cancel()
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-ctx1.Done()
+		window.queueHasSpace <- struct{}{} // emulate queue having space then filling back up
+		cancel()
+	}()
+
+	err = window.Enqueue(ctx, op2.Key, op2)
+	require.ErrorIs(t, err, ErrQueueSaturatedDepth)
+
+	_, err = window.Dequeue(ctx)
+	require.NoError(t, err)
+
+	err = window.Enqueue(ctx, op2.Key, op2)
+	require.NoError(t, err)
+}
+
+func TestOpWindowErrQueueSaturatedDepthClose(t *testing.T) {
+	t.Parallel()
+	cg := NewCallGroup(func(map[ID]*Response) {})
+	now := time.Now()
+	op1 := cg.Add(1, &tsMsg{123, now})
+	op2 := cg.Add(2, &tsMsg{234, now})
+
+	window := NewOpWindow(1, 1, time.Millisecond)
+	ctx := context.Background()
+	err := window.Enqueue(ctx, op1.Key, op1)
+	require.NoError(t, err)
+
+	go func() {
+		time.Sleep(time.Millisecond)
+		window.Close()
+	}()
+
+	err = window.Enqueue(ctx, op2.Key, op2)
+	require.ErrorIs(t, err, ErrQueueClosed)
+}
+
+func TestOpWindowDequeueEmptyQueue(t *testing.T) {
+	t.Parallel()
+	window := NewOpWindow(1, 1, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := window.Dequeue(ctx)
+	require.ErrorIs(t, err, ctx.Err())
 }

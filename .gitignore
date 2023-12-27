@@ -15,3 +15,6 @@
 
 # coverage.txt (created by go.test.sh)
 coverage.txt
+
+# vscode settings
+.vscode/settings.json
