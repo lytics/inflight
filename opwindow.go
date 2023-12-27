@@ -10,7 +10,7 @@ import (
 
 // OpWindow is a windowed, microbatching priority queue.
 // Operations for the same ID and time window form a microbatch. Microbatches are dequeued in FIFO order.
-// OpWindow provides back-pressure for both depth (i.e., number of entries in queue) and width (i.e., number of entries in a microbatch).
+// OpWindow provides backpressure for both depth (i.e., number of microbatches in queue) and width (i.e., number of operations in a microbatch).
 // OpWindow is safe for concurrent use. Its zero value is not safe to use, use NewOpWindow().
 type OpWindow struct {
 	mu sync.Mutex
@@ -36,8 +36,8 @@ type OpWindow struct {
 //	windowedBy: window size.
 func NewOpWindow(depth, width int, windowedBy time.Duration) *OpWindow {
 	q := &OpWindow{
-		queueHasItems: make(chan struct{}, 1),
-		queueHasSpace: make(chan struct{}, 1),
+		queueHasItems: make(chan struct{}),
+		queueHasSpace: make(chan struct{}),
 		done:          make(chan struct{}),
 		depth:         depth,
 		width:         width,
