@@ -67,7 +67,10 @@ func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
 		item, ok := q.m[id]
 		if ok {
 			if len(item.OpSet.set) >= q.width {
-				close(item.IsFull)
+				if !item.IsFullClosed {
+					close(item.IsFull)
+					item.IsFullClosed = true
+				}
 				q.mu.Unlock()
 				return ErrQueueSaturatedWidth
 			}
@@ -163,8 +166,9 @@ func (q *OpWindow) Dequeue(ctx context.Context) (*OpSet, error) {
 }
 
 type queueItem struct {
-	ID        ID
-	ProcessAt time.Time
-	OpSet     *OpSet
-	IsFull    chan struct{}
+	ID           ID
+	ProcessAt    time.Time
+	OpSet        *OpSet
+	IsFull       chan struct{}
+	IsFullClosed bool
 }
