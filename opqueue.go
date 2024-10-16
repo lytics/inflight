@@ -36,6 +36,8 @@ type OpQueue struct {
 	q       *list.List
 	entries map[ID]*OpSet
 	closed  bool
+
+	reducer func(opset *OpSet, op *Op)
 }
 
 // NewOpQueue create a new OpQueue.
@@ -45,9 +47,17 @@ func NewOpQueue(depth, width int) *OpQueue {
 		width:   width,
 		q:       list.New(),
 		entries: map[ID]*OpSet{},
+
+		reducer: func(opset *OpSet, op *Op) {
+			opset.append(op)
+		},
 	}
 	q.cond.L = &q.mu
 	return &q
+}
+
+func (q *OpQueue) SetReducer(fn func(opset *OpSet, op *Op)) {
+	q.reducer = fn
 }
 
 // Close releases resources associated with this callgroup, by canceling the context.
@@ -112,7 +122,7 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 		return ErrQueueSaturatedWidth
 	}
 
-	set.append(op)
+	q.reducer(set, op)
 	return nil
 }
 
