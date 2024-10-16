@@ -46,7 +46,7 @@ func NewOpWindow(depth, width int, windowedBy time.Duration) *OpWindow {
 		windowedBy:    windowedBy,
 		m:             make(map[ID]*queueItem),
 		reducer: func(opset *OpSet, op *Op) {
-			opset.append(op)
+			opset.MergeWith(appendOp, op)
 		},
 	}
 	q.q.Init()

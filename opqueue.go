@@ -49,7 +49,7 @@ func NewOpQueue(depth, width int) *OpQueue {
 		entries: map[ID]*OpSet{},
 
 		reducer: func(opset *OpSet, op *Op) {
-			opset.append(op)
+			opset.MergeWith(append, op)
 		},
 	}
 	q.cond.L = &q.mu
