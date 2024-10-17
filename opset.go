@@ -15,7 +15,7 @@ func newOpSet(op *Op) *OpSet {
 func appendOp(ops []*Op, op *Op) []*Op {
 	return append(ops, op)
 }
-func (os *OpSet) MergeWith(fn func([]*Op, *Op) []*Op, op *Op) {
+func (os *OpSet) mergeWith(fn func([]*Op, *Op) []*Op, op *Op) {
 	os.set = fn(os.set, op)
 }
 

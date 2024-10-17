@@ -37,7 +37,7 @@ type OpQueue struct {
 	entries map[ID]*OpSet
 	closed  bool
 
-	reducer func(opset *OpSet, op *Op)
+	reducer func(ops []*Op, op *Op) []*Op
 }
 
 // NewOpQueue create a new OpQueue.
@@ -48,15 +48,13 @@ func NewOpQueue(depth, width int) *OpQueue {
 		q:       list.New(),
 		entries: map[ID]*OpSet{},
 
-		reducer: func(opset *OpSet, op *Op) {
-			opset.MergeWith(append, op)
-		},
+		reducer: appendOp,
 	}
 	q.cond.L = &q.mu
 	return &q
 }
 
-func (q *OpQueue) SetReducer(fn func(opset *OpSet, op *Op)) {
+func (q *OpQueue) SetReducer(fn func(ops []*Op, op *Op) []*Op) {
 	q.reducer = fn
 }
 
@@ -122,7 +120,7 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 		return ErrQueueSaturatedWidth
 	}
 
-	q.reducer(set, op)
+	set.mergeWith(q.reducer, op)
 	return nil
 }
 

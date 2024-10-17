@@ -28,7 +28,7 @@ type OpWindow struct {
 	width      int
 	windowedBy time.Duration
 
-	reducer func(opset *OpSet, op *Op)
+	reducer func(ops []*Op, op *Op) []*Op
 }
 
 // NewOpWindow creates a new OpWindow.
@@ -45,15 +45,13 @@ func NewOpWindow(depth, width int, windowedBy time.Duration) *OpWindow {
 		width:         width,
 		windowedBy:    windowedBy,
 		m:             make(map[ID]*queueItem),
-		reducer: func(opset *OpSet, op *Op) {
-			opset.MergeWith(appendOp, op)
-		},
+		reducer:       appendOp,
 	}
 	q.q.Init()
 	return q
 }
 
-func (q *OpWindow) SetReducer(fn func(opset *OpSet, op *Op)) {
+func (q *OpWindow) SetReducer(fn func(ops []*Op, op *Op) []*Op) {
 	q.reducer = fn
 }
 
@@ -83,7 +81,7 @@ func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
 				q.mu.Unlock()
 				return ErrQueueSaturatedWidth
 			}
-			q.reducer(item.OpSet, op)
+			item.OpSet.mergeWith(q.reducer, op)
 			q.mu.Unlock()
 			return nil
 		}
