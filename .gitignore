@@ -18,3 +18,4 @@ coverage.txt
 
 # vscode settings
 .vscode/settings.json
+.aider*

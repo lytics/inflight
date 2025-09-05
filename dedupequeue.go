@@ -2,20 +2,7 @@ package inflight
 
 import (
 	"container/list"
-	"errors"
 	"sync"
-)
-
-var (
-	// ErrQueueSaturatedDepth is the error returned when the queue has reached
-	// it's max queue depth
-	ErrQueueSaturatedDepth = errors.New("queue is saturated (depth)")
-
-	// ErrQueueSaturatedWidth is the error returned when a OpSet (aka a row) with
-	// in the queue has reached it's max width.  This happens when one submits
-	// many duplicate IDs.
-	ErrQueueSaturatedWidth = errors.New("queue is saturated (width)")
-	ErrQueueClosed         = errors.New("queue closed")
 )
 
 // OpQueue is a thread-safe duplicate operation suppression queue, that combines
@@ -28,23 +15,25 @@ var (
 // On Dequeue a SET is returned of all items that share a key in the queue.
 // It blocks on dequeue if the queue is empty, but returns an error if the
 // queue is full during enqueue.
-type OpQueue struct {
+type DedupeQueue struct {
 	mu      sync.Mutex
 	cond    sync.Cond
 	depth   int
 	width   int
 	q       *list.List
 	entries map[ID]*OpSet
+	backup  map[ID]*OpSet
 	closed  bool
 }
 
 // NewOpQueue create a new OpQueue.
-func NewOpQueue(depth, width int) *OpQueue {
-	q := OpQueue{
+func NewDedupeQueue(depth, width int) *DedupeQueue {
+	q := DedupeQueue{
 		depth:   depth,
 		width:   width,
 		q:       list.New(),
 		entries: map[ID]*OpSet{},
+		backup:  map[ID]*OpSet{},
 	}
 	q.cond.L = &q.mu
 	return &q
@@ -53,7 +42,7 @@ func NewOpQueue(depth, width int) *OpQueue {
 // Close releases resources associated with this callgroup, by canceling the context.
 // The owner of this OpQueue should either call Close or cancel the context, both are
 // equivalent.
-func (q *OpQueue) Close() {
+func (q *DedupeQueue) Close() {
 	q.mu.Lock()
 	q.closed = true
 	q.mu.Unlock()
@@ -61,7 +50,7 @@ func (q *OpQueue) Close() {
 }
 
 // Len returns the number of uniq IDs in the queue, that is the depth of the queue.
-func (q *OpQueue) Len() int {
+func (q *DedupeQueue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.q.Len()
@@ -73,12 +62,21 @@ func (q *OpQueue) Len() int {
 //
 // Enqueue doesn't block if the queue if full, instead it returns a ErrQueueSaturated
 // error.
-func (q *OpQueue) Enqueue(id ID, op *Op) error {
+func (q *DedupeQueue) Enqueue(id ID, op *Op) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	if q.closed {
 		return ErrQueueClosed
+	}
+
+	if set, ok := q.backup[id]; ok {
+		if len(set.Ops()) >= q.width {
+			return ErrQueueSaturatedWidth
+		}
+
+		set.append(op)
+		return nil
 	}
 
 	set, ok := q.entries[id]
@@ -122,32 +120,41 @@ func (q *OpQueue) Enqueue(id ID, op *Op) error {
 //
 // If the OpQueue is closed, then Dequeue will return false
 // for the second parameter.
-func (q *OpQueue) Dequeue() (*OpSet, bool) {
+func (q *DedupeQueue) Dequeue(callback func(*OpSet)) bool {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	for {
-		if set, ok := q.dequeue(); ok {
-			return set, true
+		if id, set, ok := q.dequeue(); ok {
+			q.mu.Unlock()
+			callback(set)
+
+			q.mu.Lock()
+			defer q.mu.Unlock()
+			if q.backup[id].Len() > 0 {
+				q.entries[id] = q.backup[id]
+				q.q.PushBack(id)
+			}
+			delete(q.backup, id)
+			return true
 		}
 		if q.closed {
-			return nil, false
+			q.mu.Unlock()
+			return false
 		}
 		q.cond.Wait()
 	}
 }
 
-func (q *OpQueue) newEntry(id ID, op *Op) {
+func (q *DedupeQueue) newEntry(id ID, op *Op) {
 	set := newOpSet(op)
 	q.entries[id] = set
-
 	q.q.PushBack(id)
 }
 
-func (q *OpQueue) dequeue() (*OpSet, bool) {
+func (q *DedupeQueue) dequeue() (ID, *OpSet, bool) {
 	elem := q.q.Front()
 	if elem == nil {
-		return nil, false
+		return 0, nil, false
 	}
 	idt := q.q.Remove(elem)
 	id := idt.(ID)
@@ -157,5 +164,6 @@ func (q *OpQueue) dequeue() (*OpSet, bool) {
 		panic("invariant broken: we dequeued a value that isn't in the map")
 	}
 	delete(q.entries, id)
-	return set, true
+	q.backup[id] = &OpSet{}
+	return id, set, true
 }
