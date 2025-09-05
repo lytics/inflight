@@ -12,8 +12,11 @@ func newOpSet(op *Op) *OpSet {
 	}
 }
 
-func (os *OpSet) append(op *Op) {
-	os.set = append(os.set, op)
+func appendOp(ops []*Op, op *Op) []*Op {
+	return append(ops, op)
+}
+func (os *OpSet) mergeWith(fn func([]*Op, *Op) []*Op, op *Op) {
+	os.set = fn(os.set, op)
 }
 
 func (os *OpSet) Len() int {

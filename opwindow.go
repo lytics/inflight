@@ -27,6 +27,8 @@ type OpWindow struct {
 	depth      int
 	width      int
 	windowedBy time.Duration
+
+	reducer func(ops []*Op, op *Op) []*Op
 }
 
 // NewOpWindow creates a new OpWindow.
@@ -43,9 +45,14 @@ func NewOpWindow(depth, width int, windowedBy time.Duration) *OpWindow {
 		width:         width,
 		windowedBy:    windowedBy,
 		m:             make(map[ID]*queueItem),
+		reducer:       appendOp,
 	}
 	q.q.Init()
 	return q
+}
+
+func (q *OpWindow) SetReducer(fn func(ops []*Op, op *Op) []*Op) {
+	q.reducer = fn
 }
 
 // Close provides graceful shutdown: no new ops will be enqueued.
@@ -74,7 +81,7 @@ func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
 				q.mu.Unlock()
 				return ErrQueueSaturatedWidth
 			}
-			item.OpSet.append(op)
+			item.OpSet.mergeWith(q.reducer, op)
 			q.mu.Unlock()
 			return nil
 		}
