@@ -16,6 +16,10 @@ func (os *OpSet) append(op *Op) {
 	os.set = append(os.set, op)
 }
 
+func (os *OpSet) Len() int {
+	return len(os.set)
+}
+
 // Ops get the list of ops in this set.
 func (os *OpSet) Ops() []*Op {
 	return os.set

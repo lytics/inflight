@@ -1,0 +1,389 @@
+package inflight
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/lytics/inflight/testutils"
+)
+
+/*
+To insure consistency I suggest running the test for a while with the following,
+and if after 5 mins it never fails then we know the testcases are consistent.
+  while go test -v  --race ; do echo `date` ; done
+*/
+
+func TestDedupeQueue(t *testing.T) {
+	t.Parallel()
+	completed1 := 0
+	completed2 := 0
+	cg1 := NewCallGroup(func(finalState map[ID]*Response) {
+		completed1++
+	})
+
+	cg2 := NewCallGroup(func(finalState map[ID]*Response) {
+		completed2++
+	})
+
+	now := time.Now()
+	op1_1 := cg1.Add(1, &tsMsg{123, now})
+	op1_2 := cg1.Add(2, &tsMsg{111, now})
+	op2_1 := cg2.Add(1, &tsMsg{123, now})
+	op2_2 := cg2.Add(2, &tsMsg{111, now})
+
+	opq := NewDedupeQueue(10, 10)
+	defer opq.Close()
+
+	{
+		err := opq.Enqueue(op1_1.Key, op1_1)
+		assert.Equal(t, nil, err)
+		err = opq.Enqueue(op2_1.Key, op2_1)
+		assert.Equal(t, nil, err)
+		err = opq.Enqueue(op1_2.Key, op1_2)
+		assert.Equal(t, nil, err)
+		err = opq.Enqueue(op2_2.Key, op2_2)
+		assert.Equal(t, nil, err)
+		assert.Equal(t, 2, opq.Len()) // only 2 keys
+	}
+
+	opq.Dequeue(func(set1 *OpSet) {
+		assert.Equal(t, 2, len(set1.Ops()))
+		for _, op := range set1.Ops() {
+			op.Finish(nil, nil)
+		}
+	})
+	assert.Equal(t, 0, completed1)
+	assert.Equal(t, 0, completed2)
+	opq.Dequeue(func(set2 *OpSet) {
+		assert.Equal(t, 2, len(set2.Ops()))
+		set2.FinishAll(nil, nil)
+	})
+
+	assert.Equal(t, 1, completed1)
+	assert.Equal(t, 1, completed2)
+}
+
+func TestDedupeQueueClose(t *testing.T) {
+	t.Parallel()
+	completed1 := 0
+	cg1 := NewCallGroup(func(finalState map[ID]*Response) {
+		completed1++
+	})
+
+	opq := NewDedupeQueue(10, 10)
+	now := time.Now()
+
+	for i := 0; i < 9; i++ {
+		op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
+		err := opq.Enqueue(op.Key, op)
+		assert.Equal(t, nil, err)
+	}
+
+	timer := time.AfterFunc(5*time.Second, func() {
+		t.Fatalf("testcase timed out after 5 secs.")
+	})
+	for i := 0; i < 9; i++ {
+		opq.Dequeue(func(set1 *OpSet) {
+			assert.Equal(t, 1, len(set1.Ops()), " at loop:%v set1_len:%v", i, len(set1.Ops()))
+		})
+	}
+	timer.Stop()
+
+	st := time.Now()
+	time.AfterFunc(10*time.Millisecond, func() {
+		opq.Close() // calling close should release the call to opq.Dequeue()
+	})
+	open := opq.Dequeue(func(set1 *OpSet) {
+		panic("should not be called")
+	})
+	assert.Equal(t, false, open)
+	rt := time.Since(st)
+	assert.True(t, rt >= 10*time.Millisecond, "we shouldn't have returned until Close was called: returned after:%v", rt)
+
+}
+
+func TestDedupeQueueFullDepth(t *testing.T) {
+	t.Parallel()
+	completed1 := 0
+	cg1 := NewCallGroup(func(finalState map[ID]*Response) {
+		completed1++
+	})
+
+	opq := NewDedupeQueue(10, 10)
+	defer opq.Close()
+
+	succuess := 0
+	depthErrors := 0
+	widthErrors := 0
+	now := time.Now()
+
+	for i := 0; i < 100; i++ {
+		op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
+		err := opq.Enqueue(op.Key, op)
+		switch err {
+		case nil:
+			succuess++
+		case ErrQueueSaturatedDepth:
+			depthErrors++
+		case ErrQueueSaturatedWidth:
+			widthErrors++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
+		err := opq.Enqueue(op.Key, op)
+		switch err {
+		case nil:
+			succuess++
+		case ErrQueueSaturatedDepth:
+			depthErrors++
+		case ErrQueueSaturatedWidth:
+			widthErrors++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	assert.Equalf(t, succuess, 20, "expected 10, got:%v", succuess)
+	assert.Equalf(t, depthErrors, 90, "expected 90, got:%v", depthErrors)
+	assert.Equalf(t, widthErrors, 0, "expected 0, got:%v", widthErrors)
+
+	timer := time.AfterFunc(5*time.Second, func() {
+		t.Fatalf("testcase timed out after 5 secs.")
+	})
+	for i := 0; i < 10; i++ {
+		open := opq.Dequeue(
+			func(set1 *OpSet) {
+				assert.Equal(t, 2, len(set1.Ops()), " at loop:%v set1_len:%v", i, len(set1.Ops()))
+			},
+		)
+		assert.True(t, open)
+	}
+	timer.Stop()
+}
+
+// TestDedupeQueueFullWidth exactly like the test above, except we enqueue the SAME ID each time,
+// so that we get ErrQueueSaturatedWidth errrors instead of ErrQueueSaturatedDepth errors.
+func TestDedupeQueueFullWidth(t *testing.T) {
+	t.Parallel()
+	completed1 := 0
+	cg1 := NewCallGroup(func(finalState map[ID]*Response) {
+		completed1++
+	})
+
+	opq := NewDedupeQueue(10, 10)
+	defer opq.Close()
+
+	succuess := 0
+	depthErrors := 0
+	widthErrors := 0
+	now := time.Now()
+
+	for i := 0; i < 100; i++ {
+		op := cg1.Add(0, &tsMsg{uint64(i), now})
+		err := opq.Enqueue(op.Key, op)
+		switch err {
+		case nil:
+			succuess++
+		case ErrQueueSaturatedDepth:
+			depthErrors++
+		case ErrQueueSaturatedWidth:
+			widthErrors++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	for i := 1; i < 10; i++ {
+		op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
+		err := opq.Enqueue(op.Key, op)
+		switch err {
+		case nil:
+			succuess++
+		case ErrQueueSaturatedDepth:
+			depthErrors++
+		case ErrQueueSaturatedWidth:
+			widthErrors++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	assert.Equalf(t, succuess, 19, "expected 10, got:%v", succuess)
+	assert.Equalf(t, depthErrors, 0, "expected 0, got:%v", depthErrors)
+	assert.Equalf(t, widthErrors, 90, "expected 90, got:%v", widthErrors)
+
+	timer := time.AfterFunc(5*time.Second, func() {
+		t.Fatalf("testcase timed out after 5 secs.")
+	})
+
+	open := opq.Dequeue(
+		func(set1 *OpSet) {
+			assert.Equal(t, 10, len(set1.Ops()), " at loop:%v set1_len:%v", 0, len(set1.Ops())) // max width is 10, so we should get 10 in the first batch
+		})
+	assert.True(t, open)
+	for i := 1; i < 10; i++ {
+		open := opq.Dequeue(
+			func(set1 *OpSet) {
+				assert.Equal(t, 1, len(set1.Ops()), " at loop:%v set1_len:%v", i, len(set1.Ops()))
+			})
+		assert.True(t, open)
+	}
+
+	timer.Stop()
+}
+
+func TestDedupeQueueForRaceDetection(t *testing.T) {
+	t.Parallel()
+	completed1 := 0
+	cg1 := NewCallGroup(func(finalState map[ID]*Response) {
+		completed1++
+	})
+
+	enqueueCnt := testutils.AtomicInt{}
+	dequeueCnt := testutils.AtomicInt{}
+	mergeCnt := testutils.AtomicInt{}
+	depthErrorCnt := testutils.AtomicInt{}
+	widthErrorCnt := testutils.AtomicInt{}
+
+	opq := NewDedupeQueue(300, 500)
+	defer opq.Close()
+
+	startingLine1 := sync.WaitGroup{}
+	startingLine2 := sync.WaitGroup{}
+	// block all go routines until the loop has finished spinning them up.
+	startingLine1.Add(1)
+	startingLine2.Add(1)
+
+	finishLine, finish := context.WithCancel(context.Background())
+	dequeFinishLine, deqFinish := context.WithCancel(context.Background())
+	const concurrency = 2
+	now := time.Now()
+
+	for w := 0; w < concurrency; w++ {
+		go func(w int) {
+			startingLine1.Wait()
+			for i := 0; i < 1000000; i++ {
+				select {
+				case <-finishLine.Done():
+					t.Logf("worker %v exiting at %v", w, i)
+					return
+				default:
+				}
+				op := cg1.Add(uint64(i), &tsMsg{uint64(i), now})
+				err := opq.Enqueue(op.Key, op)
+				switch err {
+				case nil:
+					enqueueCnt.Incr()
+				case ErrQueueSaturatedDepth:
+					depthErrorCnt.Incr()
+				case ErrQueueSaturatedWidth:
+					widthErrorCnt.Incr()
+				default:
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		}(w)
+	}
+
+	for w := 0; w < concurrency; w++ {
+		go func() {
+			startingLine2.Wait()
+			for {
+				select {
+				case <-dequeFinishLine.Done():
+					return
+				default:
+				}
+				open := opq.Dequeue(func(set1 *OpSet) {
+					dequeueCnt.IncrBy(len(set1.Ops()))
+					if len(set1.Ops()) > 1 {
+						mergeCnt.Incr()
+					}
+				})
+				select {
+				case <-dequeFinishLine.Done():
+					return
+				default:
+				}
+				assert.True(t, open)
+			}
+		}()
+	}
+	startingLine1.Done() //release all the waiting workers.
+	startingLine2.Done() //release all the waiting workers.
+
+	const runtime = 2
+	timeout := time.AfterFunc((runtime+10)*time.Second, func() {
+		t.Fatalf("testcase timed out after 5 secs.")
+	})
+	defer timeout.Stop()
+
+	//let the testcase run for N seconds
+	time.AfterFunc(runtime*time.Second, func() {
+		finish()
+	})
+	<-finishLine.Done()
+	// Sleep to give the dequeue workers plenty of time to drain the queue before exiting.
+	time.Sleep(500 * time.Millisecond)
+	deqFinish()
+
+	enq := enqueueCnt.Get()
+	deq := dequeueCnt.Get()
+	if enq != deq {
+		t.Fatalf("enqueueCnt and dequeueCnt should match: enq:% deq:%v", enq, deq)
+	}
+	// NOTE: I get the following performance on my laptop:
+	//       dedupequeue_test.go:275: enqueue errors: 137075 mergedMsgs:2553 enqueueCnt:231437 dequeueCnt:231437 rate:115718 msgs/sec
+	//       Over 100k msg a sec is more than fast enough...
+	t.Logf("Run Stats [note errors are expect for this test]")
+	t.Logf("  enqueue errors:[depth-errs:%v width-errs:%v]", depthErrorCnt.Get(), widthErrorCnt.Get())
+	t.Logf("  mergedMsgs:%v enqueueCnt:%v dequeueCnt:%v rate:%v msgs/sec", mergeCnt.Get(), enq, deq, enq/runtime)
+}
+
+func TestDedupeQueueCloseConcurrent(t *testing.T) {
+	t.Parallel()
+
+	cg1 := NewCallGroup(func(finalState map[ID]*Response) {})
+	cg2 := NewCallGroup(func(finalState map[ID]*Response) {})
+
+	now := time.Now()
+
+	op1 := cg1.Add(1, &tsMsg{123, now})
+	op2 := cg2.Add(2, &tsMsg{321, now})
+
+	oq := NewDedupeQueue(300, 500)
+
+	var ops uint64
+	var closes uint64
+	const workers int = 12
+	for i := 0; i < workers; i++ {
+		go func() {
+			for oq.Dequeue(func(set *OpSet) { atomic.AddUint64(&ops, 1) }) {
+			}
+			atomic.AddUint64(&closes, 1)
+		}()
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, uint64(0), atomic.LoadUint64(&ops)) // nothing should have been dequeued yet
+	assert.Equal(t, uint64(0), atomic.LoadUint64(&closes))
+
+	err := oq.Enqueue(op1.Key, op1)
+	assert.Equal(t, nil, err)
+	err = oq.Enqueue(op2.Key, op2)
+	assert.Equal(t, nil, err)
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, uint64(2), atomic.LoadUint64(&ops)) // 2 uniq keys are enqueued
+	assert.Equal(t, uint64(0), atomic.LoadUint64(&closes))
+
+	oq.Close()
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, uint64(2), atomic.LoadUint64(&ops)) // we still only had 2 uniq keys seen
+	assert.Equal(t, uint64(workers), atomic.LoadUint64(&closes))
+}
