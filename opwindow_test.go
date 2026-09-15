@@ -212,3 +212,39 @@ func TestOpWindowDequeueEmptyQueue(t *testing.T) {
 	_, err := window.Dequeue(ctx)
 	require.ErrorIs(t, err, ctx.Err())
 }
+
+func TestOpWindowTryEnqueue(t *testing.T) {
+	t.Parallel()
+
+	// A window this long means nothing drains on its own during the test.
+	q := NewOpWindow(2, 2, time.Hour)
+
+	require.NoError(t, q.TryEnqueue(ID(1), &Op{Msg: "a"}))
+	require.NoError(t, q.TryEnqueue(ID(1), &Op{Msg: "b"}), "same ID appends within width")
+
+	assert.ErrorIs(t, q.TryEnqueue(ID(1), &Op{Msg: "c"}), ErrQueueSaturatedWidth)
+
+	require.NoError(t, q.TryEnqueue(ID(2), &Op{Msg: "d"}), "second distinct ID fills the depth")
+
+	// The point of TryEnqueue: report saturation instead of waiting for room.
+	done := make(chan error, 1)
+	go func() { done <- q.TryEnqueue(ID(3), &Op{Msg: "e"}) }()
+
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, ErrQueueSaturatedDepth)
+	case <-time.After(2 * time.Second):
+		t.Fatal("TryEnqueue blocked on a depth-saturated queue")
+	}
+}
+
+func TestOpWindowTryEnqueueClosed(t *testing.T) {
+	t.Parallel()
+
+	q := NewOpWindow(2, 2, time.Hour)
+	q.Close()
+
+	err := q.TryEnqueue(ID(1), &Op{Msg: "a"})
+	assert.ErrorIs(t, err, ErrQueueClosed, "Close zeroes depth; a closed queue must not read as saturated")
+	assert.NotErrorIs(t, err, ErrQueueSaturatedDepth)
+}

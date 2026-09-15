@@ -61,6 +61,15 @@ func (q *OpWindow) Close() {
 
 // Enqueue op into queue, blocking until first of: op is enqueued, ID has hit max width, context is done, or queue is closed.
 func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
+	return q.enqueue(ctx, id, op, true)
+}
+
+// TryEnqueue op into queue, never blocking
+func (q *OpWindow) TryEnqueue(id ID, op *Op) error {
+	return q.enqueue(context.Background(), id, op, false)
+}
+
+func (q *OpWindow) enqueue(ctx context.Context, id ID, op *Op, blocking bool) error {
 	q.mu.Lock() // locked on returns below
 
 	for {
@@ -81,6 +90,16 @@ func (q *OpWindow) Enqueue(ctx context.Context, id ID, op *Op) error {
 
 		if q.q.Len() >= q.depth {
 			q.mu.Unlock()
+			if !blocking {
+				// Close sets depth to zero, so a closed queue always reads as
+				// depth-saturated. Report it the way the blocking path does.
+				select {
+				case <-q.done:
+					return ErrQueueClosed
+				default:
+				}
+				return ErrQueueSaturatedDepth
+			}
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("%w: %w", ErrQueueSaturatedDepth, ctx.Err())
