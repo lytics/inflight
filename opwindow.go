@@ -162,6 +162,15 @@ func (q *OpWindow) Dequeue(ctx context.Context) (*OpSet, error) {
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
+			// The item is already off the list; put it back so a later
+			// Dequeue (e.g. a shutdown drain) can still deliver its ops.
+			q.mu.Lock()
+			q.q.PushFront(item)
+			q.mu.Unlock()
+			select {
+			case q.queueHasItems <- struct{}{}:
+			default:
+			}
 			return nil, ctx.Err()
 		case <-q.done:
 			// process right away

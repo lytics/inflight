@@ -248,3 +248,26 @@ func TestOpWindowTryEnqueueClosed(t *testing.T) {
 	assert.ErrorIs(t, err, ErrQueueClosed, "Close zeroes depth; a closed queue must not read as saturated")
 	assert.NotErrorIs(t, err, ErrQueueSaturatedDepth)
 }
+
+func TestOpWindowDequeueCanceledInWindowKeepsItem(t *testing.T) {
+	t.Parallel()
+
+	// A window this long means the only way out of the wait is ctx or Close.
+	q := NewOpWindow(2, 2, time.Hour)
+	require.NoError(t, q.TryEnqueue(ID(1), &Op{Msg: "a"}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	set, err := q.Dequeue(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, set)
+
+	require.NoError(t, q.TryEnqueue(ID(1), &Op{Msg: "b"}), "same ID still appends to the parked batch")
+
+	q.Close()
+	set, err = q.Dequeue(context.Background())
+	require.NoError(t, err, "a canceled dequeue must not lose the batch it had taken")
+	require.Len(t, set.Ops(), 2)
+	assert.Equal(t, "a", set.Ops()[0].Msg)
+	assert.Equal(t, "b", set.Ops()[1].Msg)
+}
